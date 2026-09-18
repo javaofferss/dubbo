@@ -1,0 +1,1 @@
+thrift5=org.apache.dubbo.rpc.protocol.natives.thrift5.Thrift5Protocol
