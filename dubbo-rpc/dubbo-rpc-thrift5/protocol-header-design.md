@@ -49,20 +49,27 @@ thrift 的 `TFramedTransport` 现有格式（仅 dubbo↔dubbo，故可改）：
 ```
 偏移   长度   字段              说明
 0      2      magic             0xD0 0xBB（"dubbo" 识别符，和原生 thrift 区分）
-2      1      version/flags     低 4 位 = 附件序列化 id（0=简单 KV）；高 4 位保留
+2      1      version/flags     低 4 位 = 附件序列化 id（2=hessian2）；高 4 位保留
 3      2      headerLen         附件块字节数（大端，不含前面 5 字节）
 5      headerLen  attachmentBlock   附件序列化字节
 5+HL   ...    <thrift 消息字节，由 TBinaryProtocol 正常解析>
 ```
 
-附件块序列化（`serialization id = 0`，简单 KV，避免强依赖 Dubbo 序列化）：
+附件块序列化（`serialization id = 2`，hessian2，与原生 dubbo 协议附件编解码路径一致）：
 
 ```
-重复直到消费完 headerLen 字节：
-  [4 字节 keyLen][key UTF-8][4 字节 valLen][val UTF-8]
+hessian2 writeObject(Map<String,Object>) 整体序列化
+读侧 readObject(Map.class) 反序列化
 ```
 
-> 为什么自带 magic/序列化 id：以后想换成 hessian2 / protobuf 附件、或加 request id、或加响应标记时，靠 version/flags 平滑升级，不用再改格式破坏存量。
+> 与原生对齐：`DubboCodec.encodeRequestData` 末尾 `out.writeAttachments(inv.getObjectAttachments())`，而
+> `ObjectOutput.writeAttachments` 默认实现即 `writeObject(map)`；读侧 `ObjectInput.readAttachments()`
+> 默认即 `readObject(Map.class)`。因此 `Integer`/`Long`/`Boolean`/`null`/嵌套 `Map` 均按原类型往返，
+> 不做 String 扁平化——这正是用户在原生 dubbo 协议下得到的行为。
+> `AttachmentCodec` 直接复用 `Hessian2ObjectOutput`/`Hessian2ObjectInput`（单参 OutputStream/InputStream 构造，无需 URL），
+> compile 依赖 `dubbo-serialization-hessian2`（`dubbo-rpc-triple`/`dubbo-rpc-dubbo`/`dubbo-rpc-injvm`/`dubbo-cluster` 均如此）。
+
+> 为什么自带 magic/序列化 id：协议头是定长帧控区，固定走 hessian2 是合适的（类比原生 dubbo 的 16 字节定长头也是固定格式、不随 body 序列化变化）。`version/flags` 低 4 位留作 id，将来需要换 protobuf/自定义类型分发布时按 id 分发，wire 不破坏。
 
 ### 2.3 响应方向
 
@@ -83,7 +90,7 @@ thrift 的 `TFramedTransport` 现有格式（仅 dubbo↔dubbo，故可改）：
 | 类 | 位置 | 职责 |
 |---|---|---|
 | `DubboHeader` | `thrift5/codec` | 头的编解码（读写 magic/version/headerLen/attachmentBlock）。 |
-| `AttachmentCodec` | `thrift5/codec` | `Map<String,String>` ↔ 字节的简单 KV 序列化。 |
+| `AttachmentCodec` | `thrift5/codec` | `Map<String,Object>` ↔ 字节的 hessian2 序列化（复用原生 `writeObject(map)` / `readObject(Map.class)`）。 |
 | `Thrift5AttachmentHolder` | `thrift5/support` | `ThreadLocal<Map<String,Object>>`，Transport 与 Filter 间传递附件。 |
 | `DubboHeaderClientTransport` | `thrift5/transport` | 装饰消费端 `TTransport`：写时缓冲 thrift 字节，`flush` 前从 `Thrift5AttachmentHolder` 取附件写 Dubbo 头；读响应时先剥头、回带附件塞回 `RpcContext`。 |
 | `DubboHeaderServerInputTransport` | `thrift5/transport` | 装饰提供端 `TMemoryInputTransport`：eager 消费 Dubbo 头、附件入 `Thrift5AttachmentHolder`，后续字节透传给 `TBinaryProtocol`。 |
@@ -366,9 +373,12 @@ A→B→C→… 每跳都自动跟随，**链路上无需任何一跳额外配�
 ## 7. 已确认的决定
 
 - [x] **Dubbo 头格式（§2.2）**：按 §2.2 落地。`headerLen` 用 2 字节（附件块上限 64KB），治理附件通常很小，够用；预留 `version/flags` 以便后续扩 4 字节不破坏存量。
-- [x] **附件序列化**：用简单 KV（`serialization id = 0`），不用 hessian2。
-  - 理由：治理附件是扁平 `String→String`、键值短、条目少（5~20 个），简单 KV 的编解码就是"4 字节长度 + 原样拷贝"，无查表/无反射/零依赖，CPU 与体积均优于 hessian2；hessian2 的去重/类型表优势在此场景发挥不出来。
-  - 值非字符串时 stringify；`version/flags` 低 4 位留作 `serialization id`，将来需要传对象附件可置 `1=hessian2` 按 id 分发，wire 不破坏。
+- [x] **附件序列化**：用 hessian2（`serialization id = 2`），与原生 dubbo 协议附件编解码路径对齐。
+  - 复用 `Hessian2ObjectOutput`/`Hessian2ObjectInput`，走 `writeAttachments → writeObject(map)` / `readAttachments → readObject(Map.class)`，与 `DubboCodec.encodeRequestData` 末尾 `out.writeAttachments(...)` 完全同路。
+  - 理由：原生 dubbo 协议下 `Map<String,Object>` 是保类型的（`Integer`→`Integer`、`null`→`null`、嵌套 `Map`→`Map`）。早期曾考虑用"简单 KV + 值 stringify"避免 hessian 依赖，但这会让用户 `setObjectAttachment("retries", 3)` 在另一端拿到 `String "3"` 而 `(Integer)` ClassCastException——与原生行为不符。对齐原生更可靠，且 hessian2 是 Dubbo 默认序列化、运行时必在。
+  - compile 依赖 `dubbo-serialization-hessian2`（`dubbo-rpc-triple`/`dubbo-rpc-dubbo`/`dubbo-rpc-injvm`/`dubbo-cluster` 均直接 compile 依赖此实现，有先例）。
+  - 空 / null map 仍走 `DubboHeader.writeEmpty`（headerLen=0），省一次 hessian2 序列化；读侧 headerLen=0 返回空 map。
+  - `version/flags` 低 4 位留作 `serialization id`，将来需要换 protobuf/类型分发布时按 id 分发，wire 不破坏。
 - [x] **异步客户端**：阶段一**只做同步**，异步（`$AsyncClient` + NIO）放阶段二。当前主要矛盾是治理能力打通而非吞吐；异步 Transport 的 flush/读时机差异会拖慢阶段一。
 - [x] **Filter 激活方式与顺序（对齐 tracing）**：`Thrift5HeaderFilter` 走 Dubbo SPI（`META-INF/dubbo/org.apache.dubbo.rpc.Filter`）自动激活，`group={PROVIDER, CONSUMER}` 双侧。
   - consumer：`order=Integer.MAX_VALUE-1000`（最内层，在 `ObservationSenderFilter`(MIN_VALUE+50) 之后），捕获 `invocation.attachments ∪ RpcContext.getClientAttachment()`。

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AttachmentCodecTest {
@@ -61,18 +62,28 @@ class AttachmentCodecTest {
     }
 
     @Test
-    void nullValueBecomesEmpty() {
+    void nullValuePreservedAsNull() {
+        // 与原生 dubbo 协议一致：null 往返仍是 null，不扁平成 ""
         Map<String, Object> src = new LinkedHashMap<>();
         src.put("k", null);
         Map<String, Object> dst = AttachmentCodec.decode(AttachmentCodec.encode(src));
-        assertEquals("", dst.get("k"));
+        assertNull(dst.get("k"));
     }
 
     @Test
-    void nonStringValueStringified() {
+    void nonScalarValuePreservedTyped() {
+        // 与原生 dubbo 协议一致：Integer/Long/Boolean 按原类型往返，不 toString
         Map<String, Object> src = new LinkedHashMap<>();
         src.put("count", 42L);
+        src.put("retries", 3);
+        src.put("enabled", true);
+        Map<String, Object> nested = new LinkedHashMap<>();
+        nested.put("a", 1);
+        src.put("nested", nested);
         Map<String, Object> dst = AttachmentCodec.decode(AttachmentCodec.encode(src));
-        assertEquals("42", dst.get("count"));
+        assertEquals(Long.valueOf(42L), dst.get("count"));
+        assertEquals(Integer.valueOf(3), dst.get("retries"));
+        assertEquals(Boolean.TRUE, dst.get("enabled"));
+        assertEquals(nested, dst.get("nested"));
     }
 }

@@ -16,81 +16,86 @@
  */
 package org.apache.dubbo.rpc.protocol.natives.thrift5.codec;
 
+import org.apache.dubbo.common.serialize.ObjectInput;
+import org.apache.dubbo.common.serialize.ObjectOutput;
+import org.apache.dubbo.common.serialize.hessian2.Hessian2ObjectInput;
+import org.apache.dubbo.common.serialize.hessian2.Hessian2ObjectOutput;
+
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 简单 KV 附件序列化（serialization id = 0）。
+ * 附件块编解码（serialization id = 2，hessian2）。
  *
- * <p>格式：重复 [4 字节 keyLen(大端)][key UTF-8][4 字节 valLen(大端)][val UTF-8]，直到消费完。
+ * <p>与原生 dubbo 协议的附件编解码路径一致：{@code ObjectOutput.writeAttachments(map)} 默认实现即
+ * {@code writeObject(map)}，{@code ObjectInput.readAttachments()} 默认实现即 {@code readObject(Map.class)}。
+ * 因此 {@link Integer}/{@link Long}/{@link Boolean} 等基本类型、{@code null}、嵌套 {@link Map} 均按原类型往返，
+ * 不做 String 扁平化——这正是用户在原生 dubbo 协议下得到的行为。
  *
- * <p>值非字符串时 toString；这是协议头治理附件的约定（扁平 String→String，键短、条目少）。
+ * <p>空 / null map 返回长度 0 的数组（对应 DubboHeader.writeEmpty 的 headerLen=0 路径），
+ * 读侧长度 0 的 body 返回空 map，永不为 null。
  */
 public final class AttachmentCodec {
 
     private AttachmentCodec() {}
 
     /**
-     * 编码。空或 null 返回长度 0 的数组。
+     * 编码。null 或空 map 返回长度 0 的数组。
      *
-     * @throws IllegalArgumentException 单个 key/value 长度超过 {@link Integer#MAX_VALUE} 时（理论上限，实际被 headerLen 64KB 约束）。
+     * @throws RuntimeException 包装 hessian2 写入时的 {@link java.io.IOException}（协议头编解码不抛 checked）。
      */
     public static byte[] encode(Map<String, Object> attachments) {
         if (attachments == null || attachments.isEmpty()) {
             return new byte[0];
         }
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        for (Map.Entry<String, Object> e : attachments.entrySet()) {
-            String k = e.getKey();
-            if (k == null) {
-                continue;
-            }
-            String v = e.getValue() == null ? "" : e.getValue().toString();
-            byte[] kb = k.getBytes(StandardCharsets.UTF_8);
-            byte[] vb = v.getBytes(StandardCharsets.UTF_8);
-            writeInt32(out, kb.length);
-            out.write(kb, 0, kb.length);
-            writeInt32(out, vb.length);
-            out.write(vb, 0, vb.length);
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(estimateSize(attachments));
+            ObjectOutput out = new Hessian2ObjectOutput(baos);
+            out.writeAttachments(attachments); // → writeObject(map)
+            out.flushBuffer();
+            return baos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to encode thrift5 attachments (hessian2): " + e.getMessage(), e);
         }
-        return out.toByteArray();
     }
 
     /**
-     * 解码。null 或空返回空 map（有序、可变），永不为 null。
+     * 解码。null 或空 body 返回空 map（有序、可变），永不为 null。
      *
-     * @throws ArrayIndexOutOfBoundsException 字节流不完整（被截断）时抛出——属协议异常，由调用方收口。
+     * @throws RuntimeException 包装 hessian2 读取时的 IO/ClassNotFound（协议异常由调用方收口）。
      */
     public static Map<String, Object> decode(byte[] body) {
         Map<String, Object> map = new LinkedHashMap<>();
         if (body == null || body.length == 0) {
             return map;
         }
-        int pos = 0;
-        while (pos < body.length) {
-            int kl = readInt32(body, pos);
-            pos += 4;
-            String k = new String(body, pos, kl, StandardCharsets.UTF_8);
-            pos += kl;
-            int vl = readInt32(body, pos);
-            pos += 4;
-            String v = new String(body, pos, vl, StandardCharsets.UTF_8);
-            pos += vl;
-            map.put(k, v);
+        try {
+            ObjectInput in = new Hessian2ObjectInput(new ByteArrayInputStream(body));
+            Map<String, Object> decoded = in.readAttachments(); // → readObject(Map.class)
+            if (decoded != null) {
+                map.putAll(decoded);
+            }
+            return map;
+        } catch (java.io.IOException | ClassNotFoundException e) {
+            throw new RuntimeException("Failed to decode thrift5 attachments (hessian2): " + e.getMessage(), e);
         }
-        return map;
     }
 
-    private static void writeInt32(ByteArrayOutputStream out, int v) {
-        out.write((v >>> 24) & 0xFF);
-        out.write((v >>> 16) & 0xFF);
-        out.write((v >>> 8) & 0xFF);
-        out.write(v & 0xFF);
-    }
-
-    private static int readInt32(byte[] b, int off) {
-        return ((b[off] & 0xFF) << 24) | ((b[off + 1] & 0xFF) << 16) | ((b[off + 2] & 0xFF) << 8) | (b[off + 3] & 0xFF);
+    private static int estimateSize(Map<String, Object> attachments) {
+        int n = 0;
+        for (Map.Entry<String, Object> e : attachments.entrySet()) {
+            if (e.getKey() != null) {
+                n += e.getKey().length() * 3; // UTF-8 上界估算
+            }
+            Object v = e.getValue();
+            if (v instanceof String) {
+                n += ((String) v).length() * 3;
+            } else {
+                n += 64; // 非字符串值粗略预留
+            }
+        }
+        return Math.max(64, n);
     }
 }

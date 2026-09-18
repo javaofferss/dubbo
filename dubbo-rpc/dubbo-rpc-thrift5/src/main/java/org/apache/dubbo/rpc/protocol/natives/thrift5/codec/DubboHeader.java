@@ -27,7 +27,7 @@ import org.apache.thrift.transport.TTransportException;
  * <pre>
  * 偏移 长度 字段
  * 0    2    magic 0xD0 0xBB
- * 2    1    version/flags，低 4 位 = 附件序列化 id（0 = 简单 KV）
+ * 2    1    version/flags，低 4 位 = 附件序列化 id（2 = hessian2，与原生 dubbo 协议附件路径一致）
  * 3    2    headerLen（大端，附件块字节数，不含前 5 字节，上限 64KB）
  * 5    hl   附件块（由 {@link AttachmentCodec} 按 serialization id 编解码）
  * </pre>
@@ -39,8 +39,11 @@ public final class DubboHeader {
     public static final byte MAGIC_HI = (byte) 0xD0;
     public static final byte MAGIC_LO = (byte) 0xBB;
 
-    /** serialization id = 0：简单 KV（4 字节 keyLen + UTF-8 key + 4 字节 valLen + UTF-8 val）。 */
-    public static final byte SER_ID_SIMPLE_KV = 0;
+    /**
+     * serialization id = 2：hessian2，与原生 dubbo 协议附件编解码路径一致（{@code writeObject(Map)} / {@code readObject(Map.class)}），
+     * 保留 Object 类型（Integer/Long/Boolean/null/嵌套 Map 等）。
+     */
+    public static final byte SER_ID_HESSIAN2 = 2;
 
     /** headerLen 用 2 字节，附件块上限 64KB。 */
     public static final int MAX_HEADER_LEN = 0xFFFF;
@@ -55,11 +58,15 @@ public final class DubboHeader {
     }
 
     /**
-     * 写带附件的头。
+     * 写带附件的头。null / 空 map 走 {@link #writeEmpty}（headerLen=0），省一次 hessian2 序列化。
      *
      * @throws TTransportException 附件块超过 {@link #MAX_HEADER_LEN} 时抛出。
      */
     public static void write(TTransport trans, Map<String, Object> attachments) throws TTransportException {
+        if (attachments == null || attachments.isEmpty()) {
+            writeEmpty(trans);
+            return;
+        }
         byte[] body = AttachmentCodec.encode(attachments);
         if (body.length > MAX_HEADER_LEN) {
             throw new TTransportException("thrift5 dubbo header too large: " + body.length + " > " + MAX_HEADER_LEN
@@ -68,13 +75,11 @@ public final class DubboHeader {
         byte[] head = new byte[5];
         head[0] = MAGIC_HI;
         head[1] = MAGIC_LO;
-        head[2] = SER_ID_SIMPLE_KV;
+        head[2] = SER_ID_HESSIAN2;
         head[3] = (byte) ((body.length >> 8) & 0xFF);
         head[4] = (byte) (body.length & 0xFF);
         trans.write(head, 0, 5);
-        if (body.length > 0) {
-            trans.write(body, 0, body.length);
-        }
+        trans.write(body, 0, body.length);
     }
 
     /**
@@ -90,8 +95,9 @@ public final class DubboHeader {
                     "peer is not a dubbo-thrift5 endpoint (bad magic), " + "native thrift interop is not supported");
         }
         byte serId = head[2];
-        if (serId != SER_ID_SIMPLE_KV) {
-            throw new TTransportException("unsupported thrift5 header serialization id: " + serId);
+        if (serId != SER_ID_HESSIAN2) {
+            throw new TTransportException("unsupported thrift5 header serialization id: " + serId
+                    + " (expected hessian2=" + SER_ID_HESSIAN2 + ")");
         }
         int hl = ((head[3] & 0xFF) << 8) | (head[4] & 0xFF);
         byte[] body = new byte[hl];
@@ -101,5 +107,5 @@ public final class DubboHeader {
         return AttachmentCodec.decode(body);
     }
 
-    private static final byte[] EMPTY_HEADER = new byte[] {MAGIC_HI, MAGIC_LO, SER_ID_SIMPLE_KV, 0, 0};
+    private static final byte[] EMPTY_HEADER = new byte[] {MAGIC_HI, MAGIC_LO, SER_ID_HESSIAN2, 0, 0};
 }

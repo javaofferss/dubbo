@@ -48,13 +48,16 @@ class DubboHeaderTest {
         Map<String, Object> src = new LinkedHashMap<>();
         src.put("traceId", "t-1");
         src.put("tag", "gray");
+        src.put("retries", 3); // 非字符串值：验证类型保留，不扁平成 "3"
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         TTransport w = new TIOStreamTransport(out);
         DubboHeader.write(w, src);
 
         Map<String, Object> dst = DubboHeader.read(new TMemoryInputTransport(out.toByteArray()));
-        assertEquals(src, dst);
+        assertEquals("t-1", dst.get("traceId"));
+        assertEquals("gray", dst.get("tag"));
+        assertEquals(Integer.valueOf(3), dst.get("retries"));
     }
 
     @Test
@@ -68,7 +71,7 @@ class DubboHeaderTest {
         byte[] b = out.toByteArray();
         assertEquals((byte) 0xD0, b[0]);
         assertEquals((byte) 0xBB, b[1]);
-        assertEquals(0, b[2]); // ser id
+        assertEquals(DubboHeader.SER_ID_HESSIAN2, b[2]); // ser id = 2 (hessian2)
         assertEquals(0, b[3]); // hl hi
         assertEquals(0, b[4]); // hl lo
     }

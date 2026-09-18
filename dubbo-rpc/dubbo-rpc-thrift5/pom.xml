@@ -60,6 +60,18 @@
       <scope>compile</scope>
     </dependency>
 
+    <!--
+      协议头附件块序列化，复用 Dubbo 默认 hessian2（writeObject(Map)），与原生 dubbo 协议
+      附件编解码路径一致，保留 Object 类型（Integer/Long/Boolean 等），不做 String 扁平化。
+      dubbo-rpc-triple/dubbo-rpc-dubbo/dubbo-rpc-injvm 均直接 compile 依赖此实现。
+    -->
+    <dependency>
+      <groupId>org.apache.dubbo</groupId>
+      <artifactId>dubbo-serialization-hessian2</artifactId>
+      <version>${project.version}</version>
+      <scope>compile</scope>
+    </dependency>
+
     <dependency>
       <groupId>net.bytebuddy</groupId>
       <artifactId>byte-buddy</artifactId>
