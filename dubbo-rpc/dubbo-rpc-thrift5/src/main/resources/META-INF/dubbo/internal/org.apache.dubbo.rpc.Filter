@@ -1,0 +1,2 @@
+thrift5header-consumer=org.apache.dubbo.rpc.protocol.natives.thrift5.filter.Thrift5HeaderConsumerFilter
+thrift5header-provider=org.apache.dubbo.rpc.protocol.natives.thrift5.filter.Thrift5HeaderProviderFilter

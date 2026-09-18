@@ -19,6 +19,9 @@ package org.apache.dubbo.rpc.protocol.natives.thrift5;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.protocol.AbstractProxyProtocol;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.transport.DubboHeaderClientTransport;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.transport.DubboHeaderInputProtocolFactory;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.transport.DubboHeaderOutputProtocolFactory;
 
 import java.lang.reflect.Constructor;
 import java.net.SocketException;
@@ -142,9 +145,13 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
                 );
 
         // 5. 组装 THsHaServer 参数
+        // inputProtocolFactory：请求方向 eager 消费 Dubbo 头 → holder
+        // outputProtocolFactory：响应方向 writeMessageBegin 先写 Dubbo 响应头（阶段一空头）
+        // transportFactory 默认 TFramedTransport.Factory（由 AbstractNonblockingServerArgs 构造），保持不变
         THsHaServer.Args args = new THsHaServer.Args(serverTransport)
                 .processor(processor)
-                .protocolFactory(protocolFactory)
+                .inputProtocolFactory(new DubboHeaderInputProtocolFactory(protocolFactory))
+                .outputProtocolFactory(new DubboHeaderOutputProtocolFactory())
                 .executorService(executorService);
         return args;
     }
@@ -208,10 +215,12 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
                     TSocket tSocket = new TSocket(url.getHost(), url.getPort());
                     // 这里还可以对tSocket设置项
                     tSocket.setTimeout(1000 * 60); // 60秒超时
-                    TTransport transport = new TFramedTransport(tSocket);
-                    TProtocol tprotocol = new TBinaryProtocol(transport);
+                    TTransport framed = new TFramedTransport(tSocket);
+                    // DubboHeaderClientTransport：flush 时从 holder 取附件写 Dubbo 请求头、读响应时剥头回填 RpcContext
+                    DubboHeaderClientTransport header = new DubboHeaderClientTransport(framed);
+                    TProtocol tprotocol = new TBinaryProtocol(header);
                     thriftClient = (T) constructor.newInstance(tprotocol);
-                    transport.open(); // 同步客户端需要手动打开
+                    framed.open(); // 同步客户端需要手动打开（DubboHeaderClientTransport.open 委托给 framed）
                     System.out.println("Thrift client opened for " + url);
                     T proxy = (T) ByteBuddyUtils.getProxy(syncIfaceClass, asyncIfaceClass, thriftClient);
                     return proxy;
