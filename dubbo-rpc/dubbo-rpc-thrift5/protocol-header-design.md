@@ -95,7 +95,7 @@ hessian2 writeObject(Map<String,Object>) 整体序列化
 | `DubboHeaderClientTransport` | `thrift5/transport` | 装饰消费端 `TTransport`：写时缓冲 thrift 字节，`flush` 前从 `Thrift5AttachmentHolder` 取附件写 Dubbo 头；读响应时先剥头、回带附件塞回 `RpcContext`。 |
 | `DubboHeaderServerInputTransport` | `thrift5/transport` | 装饰提供端 `TMemoryInputTransport`：eager 消费 Dubbo 头、附件入 `Thrift5AttachmentHolder`，后续字节透传给 `TBinaryProtocol`。 |
 | `DubboHeaderInputProtocolFactory` | `thrift5/transport` | `TProtocolFactory`，提供端 `inputProtocolFactory`：eager 读头 + 包 `DubboHeaderServerInputTransport`。 |
-| `DubboHeaderOutputProtocolFactory` | `thrift5/transport` | `TProtocolFactory`，提供端 `outputProtocolFactory`：返回 `TBinaryProtocol` 子类，`writeMessageBegin` 先写响应头（阶段一空头）。 |
+| `DubboHeaderOutputProtocolFactory` | `thrift5/transport` | `TProtocolFactory`，提供端 `outputProtocolFactory`：返回 `TBinaryProtocol` 子类，`writeMessageBegin` 先写响应头（阶段二从 `Thrift5ResponseAttachmentHolder` 读 `getServerResponseContext()` 附件，无附件则空头）。 |
 | `Thrift5HeaderFilter` | `thrift5/filter` | Dubbo `Filter`（SPI，`group=provider/consumer` 双侧）：consumer 侧（order 偏大、最内层）捕获 `invocation.attachments ∪ RpcContext` → holder；provider 侧（order=MIN_VALUE+10）holder → 注回 `invocation` + `RpcContext.getServerAttachment()`。 |
 
 ### 3.2 消费端改造（`Thrift5Protocol#processRefer` / `ThriftPoolDirectProxy`）
@@ -142,7 +142,8 @@ THsHaServer.Args args = new THsHaServer.Args(serverTransport)
 ```
 
 - `DubboHeaderInputProtocolFactory.getProtocol(inTrans)`：`inTrans` 是 `TMemoryInputTransport`（含完整 frame body = `[Dubbo 头 | thrift 消息]`）。**eager 读 Dubbo 头**（5 字节定长 + headerLen 字节附件）、附件入 `Thrift5AttachmentHolder`，再返回 `TBinaryProtocol(new DubboHeaderServerInputTransport(inTrans))`（剩余字节透传给 TBinaryProtocol）。eager 读发生在工作线程（`FrameBuffer.invoke()` 内），与后续 Filter 链同线程。
-- `DubboHeaderOutputProtocolFactory.getProtocol(outTrans)`：返回 `TBinaryProtocol` 子类，重写 `writeMessageBegin`：先写 Dubbo 头（阶段一 `headerLen=0`；阶段二读 `RpcContext.getServerResponseContext()`），再 `super.writeMessageBegin()`。此时业务方法已返回、附件已就绪，**无需缓冲、无需 flush 信号**——头字节直接流到 `response_`。
+- `DubboHeaderOutputProtocolFactory.getProtocol(outTrans)`：返回 `TBinaryProtocol` 子类，重写 `writeMessageBegin`：先写 Dubbo 头（阶段二从 `Thrift5ResponseAttachmentHolder` 读出 `RpcContext.getServerResponseContext()` 附件；无则 `writeEmpty`），再 `super.writeMessageBegin()`。此时业务方法已返回、附件已就绪，**无需缓冲、无需 flush 信号**——头字节直接流到 `response_`。
+- **为何经 holder 而非直接读 `getServerResponseContext()`**：sync 路径下 `Filter.Listener.onResponse` 链在 `invoker.invoke` 内部同步触发（`CallbackRegistrationInvoker` → `AsyncRpcResult.whenCompleteWithContext` → 无 Executor `CompletableFuture.whenComplete`，future 已 complete → 同线程同步跑）。`ContextFilter.onResponse`（order `MIN_VALUE`，反向序最末）在 thrift `writeMessageBegin` **之前**就 `removeServerResponseContext()` 清空了 `SERVER_RESPONSE_LOCAL`。故由 `Thrift5HeaderProviderFilter.onResponse`（order `MIN_VALUE+10`，反向序**先于** `ContextFilter` 触发，此时 `getServerResponseContext()` 仍在）把附件快照进 `Thrift5ResponseAttachmentHolder`，`writeMessageBegin` 再从 holder 读——与请求侧 `Thrift5AttachmentHolder` 对称（方向反）。
 - `TProcessor.process` → 读消息 → 调 `impl.method`（`impl` 是 `proxyFactory.getProxy(invoker, true)` 生成的 Dubbo 代理）→ 进入 Dubbo provider Filter 链。此时 holder 已有附件。
 
 ### 3.4 与 Dubbo Filter 链桥接（`Thrift5HeaderFilter`）
@@ -258,7 +259,7 @@ Thrift5HeaderFilter(provider)  inv.addAttachments(holder)
 6. **连接池**：`ThriftGenericKeyedObjectPool` 复用 client，Transport 装饰器随 client 一起池化；holder 是 per-call 的 ThreadLocal，不随 client 走，无状态冲突。
 7. **与原生 thrift 不互通**：本方案 wire 加了 Dubbo 头，原生 libthrift 服务端读帧后会把头当 thrift 消息解析 → 报错。这是"仅 dubbo↔dubbo"的预期代价，文档/README 要写明。
 8. **magic 校验失败的处理**：消费端/提供端若读到非 `0xD0BB`，说明对端是原生 thrift，应抛清晰异常（"对端非 dubbo thrift5，不支持互通"），而不是当 bug 排查。
-9. **响应方向（已简化）**：响应侧用 `outputProtocolFactory_`（重写 `writeMessageBegin` 先写头），阶段一写 `headerLen=0` 空头即可与消费端对称、且阶段二直接填 `RpcContext.getServerResponseContext()` 附件平滑升级。**无需缓冲、无需 flush 信号**。原 §3.3 用 `outputTransportFactory` + 缓冲的方案已废弃。
+9. **响应方向（阶段二已落地）**：响应侧用 `outputProtocolFactory_`（重写 `writeMessageBegin` 先写头）。附件源是 `RpcContext.getServerResponseContext()`，但因 sync 路径 `ContextFilter.onResponse` 会先行清空它（见 §3.3 时序说明），故经 `Thrift5ResponseAttachmentHolder` 中转：`Thrift5HeaderProviderFilter.onResponse`（反向序先于 `ContextFilter`）快照 → `writeMessageBegin` 读出。**无需缓冲、无需 flush 信号**。原 §3.3 用 `outputTransportFactory` + 缓冲的方案已废弃。
 10. **生成代码 flush（联调确认）**：消费端 `$Client.send_X` 末尾调 `oprot_.getTransport().flush()`、提供端 `Processor.process` 末尾调 flush——TFramedTransport 契约要求，应存在。联调时对着实际生成的 `$Client`/`$Processor` 确认一次；缺失则消费端写头缺触发点。
 
 ---
@@ -287,7 +288,7 @@ provider 侧 `Thrift5HeaderFilter`(`order=MIN_VALUE+10`) 与各治理 filter 的
 | 灰度/压测标 | ✅ | 阶段一 |
 | 标签路由（consumer 内决策） | ✅（`TagStateRouter` 读 invocation tag / URL `dubbo.tag`） | 阶段一 |
 | 标签跨跳跟随（全链路灰度 A→B→C） | ✅（搭原生 `ConsumerContextFilter` 穿透 + 我们注回 server RpcContext，详见 §5.3） | 阶段一（同线程嵌套） |
-| result attachment 回带 | ✅ | 阶段二 |
+| result attachment 回带 | ✅（经 `Thrift5ResponseAttachmentHolder`，sync 路径已实证） | 阶段二 |
 
 ## 5.2 协议头范围之外的能力（与原生对照）
 
@@ -360,7 +361,7 @@ A→B→C→… 每跳都自动跟随，**链路上无需任何一跳额外配�
 9. 联调 tracing：启用 `dubbo-tracing`（OTel/Brave），验证 traceId 经 `ObservationSenderFilter`→invocation→我们的头→provider `ObservationReceiverFilter` 全链路打通。
 
 **阶段二（补齐，对齐原生其余协议头能力）**
-10. 响应方向 result attachment 回带（`outputProtocolFactory` 写头时填 `RpcContext.getServerResponseContext()` 附件；消费端剥头回填）。
+10. ✅ 响应方向 result attachment 回带（`Thrift5HeaderProviderFilter.onResponse` → `Thrift5ResponseAttachmentHolder` → `DubboHeaderOutputProtocolFactory.writeMessageBegin` 读出写头；消费端 `DubboHeaderClientTransport.consumeResponseHeader` 剥头回填 `getClientResponseContext()`）。详见 §3.3 时序说明。
 11. 异步客户端（`$AsyncClient`）适配。
 12. `ThriftInterceptor` / `ThriftPoolDirectProxy` 模板清理，把日志埋点收敛到 Filter。
 13. 异常路径（连接失效、magic 校验失败、附件超大）的收口。
@@ -419,7 +420,7 @@ graph LR
         RECV["ObservationReceiverFilter<br/><i>order=MIN_VALUE+50</i><br/>从 invocation 抽 traceId"]
         TOKEN["TokenFilter / EchoFilter / ExceptionFilter"]
         IMPL["业务实现<br/>RpcContext.getServerAttachment()<br/>.getAttachment(traceId/tag) ✅"]
-        OUTF["DubboHeaderOutputProtocolFactory<br/>writeMessageBegin: 先写响应头<br/>(阶段一空头; 阶段二 result attachment)"]
+        OUTF["DubboHeaderOutputProtocolFactory<br/>writeMessageBegin: 先写响应头<br/>(阶段二: 从 Thrift5ResponseAttachmentHolder 读 result attachment)"]
 
         NIO --> FBUF --> IPF --> PROC --> CONTEXT --> TFILT --> RECV --> TOKEN --> IMPL --> OUTF
     end

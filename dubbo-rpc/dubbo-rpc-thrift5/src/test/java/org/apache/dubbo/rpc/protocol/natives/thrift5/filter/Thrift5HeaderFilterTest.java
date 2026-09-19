@@ -25,6 +25,7 @@ import org.apache.dubbo.rpc.RpcContext;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.RpcInvocation;
 import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5AttachmentHolder;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5ResponseAttachmentHolder;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -46,6 +47,7 @@ class Thrift5HeaderFilterTest {
     @AfterEach
     void cleanup() {
         Thrift5AttachmentHolder.clear();
+        Thrift5ResponseAttachmentHolder.clear();
         RpcContext.removeClientResponseContext();
         RpcContext.removeServerResponseContext();
     }
@@ -181,5 +183,101 @@ class Thrift5HeaderFilterTest {
         // 非 thrift5：不应碰 holder
         assertTrue(Thrift5AttachmentHolder.get() == null
                 || Thrift5AttachmentHolder.get().isEmpty());
+    }
+
+    /** provider filter.onResponse 把 getServerResponseContext() 快照进响应 holder(先于 ContextFilter.onResponse 清空)。 */
+    @Test
+    void providerOnResponseCapturesServerResponseContextToHolder() {
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("hitCache", "true");
+        resp.put("serverSpanId", "span-9");
+        RpcContext.getServerResponseContext().getObjectAttachments().putAll(resp);
+
+        RpcInvocation inv = new RpcInvocation();
+        Result result = AsyncRpcResult.newDefaultAsyncResult((Object) null, inv);
+        Invoker<Object> stub = thrift5Stub();
+
+        new Thrift5HeaderProviderFilter().onResponse(result, stub, inv);
+
+        assertEquals("true", Thrift5ResponseAttachmentHolder.get().get("hitCache"));
+        assertEquals("span-9", Thrift5ResponseAttachmentHolder.get().get("serverSpanId"));
+    }
+
+    /** provider filter.onError 清响应 holder(异常响应不带附件,factory 走 writeEmpty)。 */
+    @Test
+    void providerOnErrorClearsHolder() {
+        Map<String, Object> stale = new LinkedHashMap<>();
+        stale.put("stale", "leak");
+        Thrift5ResponseAttachmentHolder.set(stale);
+        RpcInvocation inv = new RpcInvocation();
+        Invoker<Object> stub = thrift5Stub();
+
+        new Thrift5HeaderProviderFilter().onError(new RuntimeException("boom"), stub, inv);
+
+        assertNull(Thrift5ResponseAttachmentHolder.get());
+    }
+
+    /** 非 thrift5 协议:onResponse 不碰响应 holder。 */
+    @Test
+    void providerOnResponseBypassedForNonThrift5() {
+        Thrift5ResponseAttachmentHolder.clear();
+        RpcContext.getServerResponseContext().setObjectAttachment("x", "y");
+        RpcInvocation inv = new RpcInvocation();
+        Result result = AsyncRpcResult.newDefaultAsyncResult((Object) null, inv);
+        Invoker<Object> dubboStub = new Invoker<Object>() {
+            @Override
+            public Class<Object> getInterface() {
+                return Object.class;
+            }
+
+            @Override
+            public URL getUrl() {
+                return URL.valueOf("dubbo://localhost:20880/OtherService");
+            }
+
+            @Override
+            public boolean isAvailable() {
+                return true;
+            }
+
+            @Override
+            public Result invoke(Invocation invocation) throws RpcException {
+                return AsyncRpcResult.newDefaultAsyncResult((Object) null, invocation);
+            }
+
+            @Override
+            public void destroy() {}
+        };
+
+        new Thrift5HeaderProviderFilter().onResponse(result, dubboStub, inv);
+
+        assertNull(Thrift5ResponseAttachmentHolder.get());
+    }
+
+    private static Invoker<Object> thrift5Stub() {
+        return new Invoker<Object>() {
+            @Override
+            public Class<Object> getInterface() {
+                return Object.class;
+            }
+
+            @Override
+            public URL getUrl() {
+                return URL.valueOf("thrift5://localhost:40880/MyService");
+            }
+
+            @Override
+            public boolean isAvailable() {
+                return true;
+            }
+
+            @Override
+            public Result invoke(Invocation invocation) throws RpcException {
+                return AsyncRpcResult.newDefaultAsyncResult((Object) null, invocation);
+            }
+
+            @Override
+            public void destroy() {}
+        };
     }
 }

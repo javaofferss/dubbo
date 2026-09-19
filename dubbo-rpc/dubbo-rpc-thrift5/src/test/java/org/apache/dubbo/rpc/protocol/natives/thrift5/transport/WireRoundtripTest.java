@@ -16,9 +16,18 @@
  */
 package org.apache.dubbo.rpc.protocol.natives.thrift5.transport;
 
+import org.apache.dubbo.common.URL;
+import org.apache.dubbo.rpc.AsyncRpcResult;
+import org.apache.dubbo.rpc.Invocation;
+import org.apache.dubbo.rpc.Invoker;
+import org.apache.dubbo.rpc.Result;
 import org.apache.dubbo.rpc.RpcContext;
+import org.apache.dubbo.rpc.RpcException;
+import org.apache.dubbo.rpc.RpcInvocation;
 import org.apache.dubbo.rpc.protocol.natives.thrift5.codec.DubboHeader;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.filter.Thrift5HeaderProviderFilter;
 import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5AttachmentHolder;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5ResponseAttachmentHolder;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
@@ -52,7 +61,9 @@ class WireRoundtripTest {
     @AfterEach
     void cleanup() {
         Thrift5AttachmentHolder.clear();
+        Thrift5ResponseAttachmentHolder.clear();
         RpcContext.removeClientResponseContext();
+        RpcContext.removeServerResponseContext();
     }
 
     /** 消费者写 + 提供者读：附件经 holder 到达、thrift 消息完整回读。 */
@@ -147,6 +158,51 @@ class WireRoundtripTest {
         clientProto.readMessageEnd();
     }
 
+    /**
+     * 经 {@link DubboHeaderOutputProtocolFactory} 写带附件的响应(holder 链路)+ consumer 读:
+     * provider filter {@code onResponse} 把 {@code getServerResponseContext()} 快照进 holder,
+     * factory 从 holder 读出写进响应头,consumer 读回塞进 {@code getClientResponseContext()}。
+     */
+    @Test
+    void responseDirectionViaFactory() throws Exception {
+        Map<String, Object> respAttachments = new LinkedHashMap<>();
+        respAttachments.put("hitCache", "true");
+        respAttachments.put("serverSpanId", "span-9");
+        RpcContext.getServerResponseContext().getObjectAttachments().putAll(respAttachments);
+
+        // 模拟 CallbackRegistrationInvoker:在 invoker.invoke 返回后、先于 ContextFilter.onResponse
+        // (反向序)触发本 filter.onResponse —— 此时 serverResponseContext 仍在
+        RpcInvocation inv = new RpcInvocation();
+        Result result = AsyncRpcResult.newDefaultAsyncResult((Object) null, inv);
+        Invoker<Object> stub = thrift5Stub();
+        new Thrift5HeaderProviderFilter().onResponse(result, stub, inv);
+        assertEquals(respAttachments, Thrift5ResponseAttachmentHolder.get());
+
+        // output factory 从 holder 读出写进响应头
+        ByteArrayOutputStream respOut = new ByteArrayOutputStream();
+        TTransport respWrite = new TIOStreamTransport(respOut);
+        TProtocol outProto = new DubboHeaderOutputProtocolFactory().getProtocol(respWrite);
+        outProto.writeMessageBegin(new TMessage("echo", TMessageType.REPLY, 7));
+        outProto.writeMessageEnd();
+        byte[] respBody = respOut.toByteArray();
+        // factory 读后即清
+        assertNull(Thrift5ResponseAttachmentHolder.get());
+
+        // 消费者读
+        DubboHeaderClientTransport clientRead = new DubboHeaderClientTransport(new TMemoryInputTransport(respBody));
+        TProtocol clientProto = new TBinaryProtocol(clientRead);
+
+        assertNull(RpcContext.getClientResponseContext().getObjectAttachment("hitCache"));
+        TMessage msg = clientProto.readMessageBegin(); // 触发剥响应头
+        assertEquals("echo", msg.name);
+        assertEquals(TMessageType.REPLY, msg.type);
+        assertEquals(7, msg.seqid);
+        // 回带附件已塞回 client response context
+        assertEquals("true", RpcContext.getClientResponseContext().getObjectAttachment("hitCache"));
+        assertEquals("span-9", RpcContext.getClientResponseContext().getObjectAttachment("serverSpanId"));
+        clientProto.readMessageEnd();
+    }
+
     /** 池化的 client transport 可复用：上一轮响应头消费标记在 flush 时被重置。 */
     @Test
     void pooledTransportReusableAcrossCalls() throws Exception {
@@ -171,5 +227,33 @@ class WireRoundtripTest {
 
     private static int readFrameLen(byte[] wire) {
         return ((wire[0] & 0xFF) << 24) | ((wire[1] & 0xFF) << 16) | ((wire[2] & 0xFF) << 8) | (wire[3] & 0xFF);
+    }
+
+    /** 最小 thrift5 Invoker stub,仅用于触发 filter.onResponse 的协议 guard。 */
+    private static Invoker<Object> thrift5Stub() {
+        return new Invoker<Object>() {
+            @Override
+            public Class<Object> getInterface() {
+                return Object.class;
+            }
+
+            @Override
+            public URL getUrl() {
+                return URL.valueOf("thrift5://localhost:40880/MyService");
+            }
+
+            @Override
+            public boolean isAvailable() {
+                return true;
+            }
+
+            @Override
+            public Result invoke(Invocation invocation) throws RpcException {
+                return AsyncRpcResult.newDefaultAsyncResult((Object) null, invocation);
+            }
+
+            @Override
+            public void destroy() {}
+        };
     }
 }
