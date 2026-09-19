@@ -21,7 +21,6 @@ import org.apache.dubbo.rpc.RpcContextAttachment;
 import org.apache.dubbo.rpc.protocol.natives.thrift5.codec.DubboHeader;
 import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5AttachmentHolder;
 
-import java.io.ByteArrayOutputStream;
 import java.util.Map;
 
 import org.apache.thrift.transport.TTransport;
@@ -32,24 +31,30 @@ import org.apache.thrift.transport.TTransportException;
  *
  * <p>它装饰同步客户端的 {@code TFramedTransport}：
  * <ul>
- *   <li>写路径：{@code TBinaryProtocol} 写 thrift 消息 → {@link #write} 缓冲到本地 BAOS；
- *       {@link #flush} 时先从 {@link Thrift5AttachmentHolder} 取附件写 Dubbo 请求头，
- *       再写缓冲的 thrift 字节，最后委托内层 {@code TFramedTransport.flush()}（自动补 4 字节 frame 长度）。
- *       最终 wire = {@code [4B len][Dubbo 头 | thrift 消息]}。</li>
+ *   <li>写路径：不再自建 BAOS 中转。第一次 {@link #write} 时把 Dubbo 请求头（来自
+ *       {@link Thrift5AttachmentHolder}）直接 {@code inner.write} 进 TFramedTransport 的 buffer，
+ *       随后 thrift 字节也直接 {@code inner.write} 落进同一个 buffer。最终 inner 的 buffer 内为
+ *       {@code [Dubbo 头 | thrift 消息]}，{@link #flush} 只需 {@code inner.flush()}
+ *       （TFramedTransport 自动补 4 字节 frame 长度 → wire = {@code [4B len][Dubbo 头 | thrift 消息]}）。
+ *       拷贝次数落到 TFramedTransport 帧协议下限（写进 buffer 1 次 + flush 的 toByteArray 1 次）。<br>
+ *       {@code Thrsift5AttachmentHolder} 由 consumer filter 在 {@code invoker.invoke} 之前设好，
+ *       早于 thrift client 的 {@code send_X}（即第一次 {@code write}），故第一次 write 时 header 必然就位。</li>
  *   <li>读路径：{@link #read} 第一次调用时先消费响应 Dubbo 头，把回带附件塞回
  *       {@link RpcContext#getClientResponseContext()}，后续读透传给内层 transport 读 thrift 响应消息。</li>
  * </ul>
  *
  * <p>实例随 thrift client 一起池化（{@code ThriftGenericKeyedObjectPool}），故
- * {@link #flush} 会重置响应头消费标记以适配下一次调用。
+ * {@link #flush} 会重置响应头消费标记与 headerWritten 标记以适配下一次调用。
  */
 public class DubboHeaderClientTransport extends TTransport {
 
     private final TTransport inner;
-    private final ByteArrayOutputStream writeBuffer = new ByteArrayOutputStream();
+
+    /** 请求头是否已随本次写流写入 inner。实例池化，每次 flush 时重置。 */
+    private volatile boolean headerWritten = false;
 
     /** 响应头是否已消费。实例池化，每次 flush 时重置。 */
-    private boolean responseHeaderConsumed = false;
+    private volatile boolean responseHeaderConsumed = false;
 
     public DubboHeaderClientTransport(TTransport inner) {
         this.inner = inner;
@@ -91,27 +96,36 @@ public class DubboHeaderClientTransport extends TTransport {
 
     @Override
     public void write(byte[] buf, int off, int len) throws TTransportException {
-        writeBuffer.write(buf, off, len);
+        // 懒写：第一次写时先把 Dubbo 请求头落进 inner 的 buffer，保证 [头 | thrift 消息] 顺序
+        if (!headerWritten) {
+            writeRequestHeader();
+            headerWritten = true;
+        }
+        inner.write(buf, off, len);
     }
 
-    @Override
-    public void flush() throws TTransportException {
-        // 新一轮请求-响应：重置响应头消费标记
-        responseHeaderConsumed = false;
-
+    private void writeRequestHeader() throws TTransportException {
         Map<String, Object> hdr = Thrift5AttachmentHolder.get();
         if (hdr == null || hdr.isEmpty()) {
             DubboHeader.writeEmpty(inner);
         } else {
             DubboHeader.write(inner, hdr);
         }
+    }
 
-        byte[] thriftBytes = writeBuffer.toByteArray();
-        writeBuffer.reset();
-        if (thriftBytes.length > 0) {
-            inner.write(thriftBytes, 0, thriftBytes.length);
+    @Override
+    public void flush() throws TTransportException {
+        // 新一轮请求-响应：重置两个标记以适配池化复用
+        responseHeaderConsumed = false;
+
+        // 兜底：若上层在未触发任何 write 的情况下直接 flush（理论上 thrift 不该如此），仍要出请求头
+        if (!headerWritten) {
+            writeRequestHeader();
+            headerWritten = true;
         }
-        // 内层 TFramedTransport.flush(): 补 4 字节 frame 长度 → wire = [4B len][Dubbo头|thrift]
+        headerWritten = false;
+
+        // inner(TFramedTransport).flush(): 补 4 字节 frame 长度 → wire = [4B len][Dubbo头 | thrift]
         inner.flush();
     }
 }
