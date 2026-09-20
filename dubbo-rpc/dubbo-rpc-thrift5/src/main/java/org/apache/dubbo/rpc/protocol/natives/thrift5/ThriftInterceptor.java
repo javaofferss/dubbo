@@ -36,11 +36,11 @@ public class ThriftInterceptor {
         log.info("methodName {}", methodName);
     }
 
-    public void success(Object client, String methodName, Object response) {
+    public void success(Object client, String methodName, Object response, Object... args) {
         log.info("methodName {}", methodName);
     }
 
-    public void error(Object client, String methodName, Throwable throwable) {
+    public void error(Object client, String methodName, Throwable throwable, Object... args) {
         log.info("methodName {}", methodName);
     }
 

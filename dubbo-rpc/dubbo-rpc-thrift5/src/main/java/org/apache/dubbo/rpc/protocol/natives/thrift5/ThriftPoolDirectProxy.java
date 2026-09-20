@@ -60,8 +60,9 @@ public class ThriftPoolDirectProxy {
             + "            o = thriftInterceptor.borrowClient(pool, key);\n"
             + "            thriftInterceptor.before(o, \"%s\", %s);\n";
     static String METHOD_I_RETURN =
-            "  %s res = ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", res); return res; \n";
-    static String METHOD_I_VOID = "  ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", null); return ; \n";
+            "  %s res = ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", res, %s); return res; \n";
+    static String METHOD_I_VOID =
+            "  ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
     static String METHOD_I3 = " } catch (Exception e) {\n" + "            e.printStackTrace();\n"
             + "            thriftInterceptor.error(o, \"%s\", e); errObj = e; \n"
             + "            throw new RuntimeException(e);\n"
@@ -149,10 +150,17 @@ public class ThriftPoolDirectProxy {
                 code.append(METHOD_E);
                 code.append(String.format(METHOD_I, methodName, pcObjs));
                 if (returnType == Void.class || returnType == void.class) {
-                    code.append(String.format(METHOD_I_VOID, faceClassNameCode, methodName, pcObjs, methodName));
+                    code.append(
+                            String.format(METHOD_I_VOID, faceClassNameCode, methodName, pcObjs, methodName, pcObjs));
                 } else {
                     code.append(String.format(
-                            METHOD_I_RETURN, returnType.getName(), faceClassNameCode, methodName, pcObjs, methodName));
+                            METHOD_I_RETURN,
+                            returnType.getName(),
+                            faceClassNameCode,
+                            methodName,
+                            pcObjs,
+                            methodName,
+                            pcObjs));
                 }
                 code.append(String.format(METHOD_I3, methodName, methodName));
                 code.append(METHOD_END);
