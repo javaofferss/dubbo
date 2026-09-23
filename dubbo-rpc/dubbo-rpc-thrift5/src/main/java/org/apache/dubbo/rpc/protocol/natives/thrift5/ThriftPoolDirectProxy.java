@@ -23,6 +23,10 @@ import java.io.StringReader;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.function.BiFunction;
 
 import org.codehaus.janino.SimpleCompiler;
@@ -102,9 +106,9 @@ public class ThriftPoolDirectProxy {
         code.append(String.format(C, simpleClassName));
 
         // 实现抽象方法
-        Method[] declaredMethods = syncIfaceClass.getDeclaredMethods();
+        List<Method> declaredMethods = getMethods(syncIfaceClass);
         processMethods(declaredMethods, code, syncIfaceClassNameCode);
-        Method[] declaredMethods2 = asyncIfaceClass.getDeclaredMethods();
+        List<Method> declaredMethods2 = getMethods(asyncIfaceClass);
         processMethods(declaredMethods2, code, asyncIfaceClassNameCode);
         code.append(CLASS_END);
         SimpleCompiler compiler = new SimpleCompiler();
@@ -118,7 +122,7 @@ public class ThriftPoolDirectProxy {
         return proxyClass;
     }
 
-    private static void processMethods(Method[] declaredMethods, StringBuilder code, String faceClassNameCode) {
+    private static void processMethods(List<Method> declaredMethods, StringBuilder code, String faceClassNameCode) {
         for (Method method : declaredMethods) {
             if (Modifier.isAbstract(method.getModifiers())) {
                 // 获取返回类型;
@@ -183,5 +187,34 @@ public class ThriftPoolDirectProxy {
             throwable.printStackTrace();
         }
         return ThriftPoolProxy.getProxyObject(clazz, url, processRefer);
+    }
+
+    public static List<Method> getMethods(Class clazz) {
+        Set<Class> extendsInterfaces = getExtendsInterfaces(clazz);
+        extendsInterfaces.add(clazz);
+        ArrayList<Method> list = new ArrayList<>();
+
+        for(Class c : extendsInterfaces){
+            Method[] declaredMethods = c.getDeclaredMethods();
+            for (Method method : declaredMethods) {
+                list.add(method);
+            }
+        }
+
+        return list;
+    }
+
+    public static Set<Class> getExtendsInterfaces(Class clazz) {
+        Set<Class> list = new HashSet<>();
+        if(!clazz.isInterface()) {
+            return list;
+        }
+        Class[] interfaces = clazz.getInterfaces();
+        for (Class suClass : interfaces) {
+            list.add(suClass);
+            list.addAll(getExtendsInterfaces(suClass));
+        }
+
+        return list;
     }
 }
