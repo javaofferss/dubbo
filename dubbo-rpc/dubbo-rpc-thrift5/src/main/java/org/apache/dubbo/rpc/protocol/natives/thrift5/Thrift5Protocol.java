@@ -35,12 +35,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
 import org.apache.thrift.TProcessor;
+import org.apache.thrift.TProcessorFactory;
 import org.apache.thrift.async.TAsyncClientManager;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocol;
 import org.apache.thrift.protocol.TProtocolFactory;
 import org.apache.thrift.server.THsHaServer;
-import org.apache.thrift.server.TServer;
 import org.apache.thrift.transport.*;
 
 /**
@@ -71,7 +71,7 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
         String key = url.getAddress() + "_" + url.getPort();
         if (servers.containsKey(key)) {
             ThriftServer thriftServer = servers.get(key);
-            if (thriftServer.server.isServing()) {
+            if (!thriftServer.server.isStopped()) {
                 return thriftServer.runnable;
             }
             servers.remove(key);
@@ -121,7 +121,7 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
         }
     }
 
-    public THsHaServer.Args getDefaultArgs(
+    public THsHaServer createServer(
             TNonblockingServerTransport serverTransport, TProcessor processor, TProtocolFactory protocolFactory) {
         int cpuCores = Runtime.getRuntime().availableProcessors();
         ExecutorService executorService = new ThreadPoolExecutor(
@@ -144,16 +144,18 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
                 new ThreadPoolExecutor.CallerRunsPolicy() // 拒绝策略：由调用者线程执行，保证系统不崩溃
                 );
 
-        // 5. 组装 THsHaServer 参数
-        // inputProtocolFactory：请求方向 eager 消费 Dubbo 头 → holder
-        // outputProtocolFactory：响应方向 writeMessageBegin 先写 Dubbo 响应头（阶段一空头）
-        // transportFactory 默认 TFramedTransport.Factory（由 AbstractNonblockingServerArgs 构造），保持不变
-        THsHaServer.Args args = new THsHaServer.Args(serverTransport)
-                .processor(processor)
-                .inputProtocolFactory(new DubboHeaderInputProtocolFactory(protocolFactory))
-                .outputProtocolFactory(new DubboHeaderOutputProtocolFactory())
-                .executorService(executorService);
-        return args;
+        // fork 版 0.5.0-mdf：无 Args builder，inputProtocolFactory / outputProtocolFactory / executorService
+        // 全部经构造器参数传入。transportFactory 默认 TFramedTransport.Factory，显式传入保持不变。
+        return new THsHaServer(
+                new TProcessorFactory(processor),
+                serverTransport,
+                new TFramedTransport.Factory(),
+                // 请求方向：eager 消费 Dubbo 头 → holder
+                new DubboHeaderInputProtocolFactory(protocolFactory),
+                // 响应方向：writeMessageBegin 先写 Dubbo 响应头（阶段一空头）
+                new DubboHeaderOutputProtocolFactory(),
+                executorService,
+                new THsHaServer.Options());
     }
 
     public ThriftServer processExport(int port, TProcessor processor) {
@@ -169,11 +171,8 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
             // 3. 配置协议工厂，注意服务端和客户端的协议要保持一致
             TProtocolFactory protocolFactory = new TBinaryProtocol.Factory();
 
-            // 4. 创建非阻塞服务器参数
-            THsHaServer.Args defaultArgs = getDefaultArgs(serverTransport, processor, protocolFactory);
-
-            // 5. 创建非阻塞服务器
-            TServer server = new THsHaServer(defaultArgs);
+            // 4. 创建非阻塞服务器（fork 版 0.5.0-mdf 无 Args builder，直接构造）
+            THsHaServer server = createServer(serverTransport, processor, protocolFactory);
 
             // 6. 启动服务（会阻塞主线程）
             new Thread(() -> {
@@ -184,7 +183,7 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
             System.out.println("\nThrift server started at port " + port);
             thriftServer.server = server;
             thriftServer.runnable = () -> {
-                if (server.isServing()) {
+                if (!server.isStopped()) {
                     server.stop();
                 }
             };
@@ -263,7 +262,7 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
     }
 
     static class ThriftServer {
-        TServer server;
+        THsHaServer server;
         Runnable runnable;
     }
 }
