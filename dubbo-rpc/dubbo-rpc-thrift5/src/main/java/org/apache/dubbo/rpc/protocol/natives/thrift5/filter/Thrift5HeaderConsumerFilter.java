@@ -50,6 +50,7 @@ public class Thrift5HeaderConsumerFilter implements Filter {
         }
 
         Map<String, Object> hdr = new LinkedHashMap<>();
+        //可以看这个类 {@link ConsumerContextFilter} 支持 attachments 全链路透传.
         Map<String, Object> invAtt = inv.getObjectAttachments();
         if (invAtt != null) {
             hdr.putAll(invAtt); // tracing/token 等外层 filter 注入的在此

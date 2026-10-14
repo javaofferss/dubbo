@@ -73,11 +73,15 @@ public final class DubboHeader {
                     + ", consider trimming attachments");
         }
         byte[] head = new byte[5];
+        //设置魔术
         head[0] = MAGIC_HI;
         head[1] = MAGIC_LO;
+        //设置头部数据序列化规则
         head[2] = SER_ID_HESSIAN2;
+        //记录头部数据的长度
         head[3] = (byte) ((body.length >> 8) & 0xFF);
         head[4] = (byte) (body.length & 0xFF);
+        //开始写入头部元数据和真实的头部数据
         trans.write(head, 0, 5);
         trans.write(body, 0, body.length);
     }
@@ -88,6 +92,7 @@ public final class DubboHeader {
      * @throws TTransportException magic 不符或序列化 id 不支持时抛出。
      */
     public static Map<String, Object> read(TTransport trans) throws TTransportException {
+        //读取头部元数据并进行校验检查
         byte[] head = new byte[5];
         trans.readAll(head, 0, 5);
         if (head[0] != MAGIC_HI || head[1] != MAGIC_LO) {
@@ -99,6 +104,7 @@ public final class DubboHeader {
             throw new TTransportException("unsupported thrift5 header serialization id: " + serId
                     + " (expected hessian2=" + SER_ID_HESSIAN2 + ")");
         }
+        //读取头部真实数据。并进行反序列化
         int hl = ((head[3] & 0xFF) << 8) | (head[4] & 0xFF);
         byte[] body = new byte[hl];
         if (hl > 0) {
