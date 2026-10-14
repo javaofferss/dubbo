@@ -43,6 +43,7 @@ import org.mockito.Mockito;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANY_VALUE;
 import static org.apache.dubbo.common.constants.CommonConstants.TAG_KEY;
+import static org.apache.dubbo.rpc.Constants.FORCE_USE_TAG;
 import static org.mockito.Mockito.when;
 
 class TagStateRouterTest {
@@ -371,5 +372,183 @@ class TagStateRouterTest {
         Assertions.assertEquals(invoker1, filteredInvokers.get(0));
         Assertions.assertEquals(invoker2, filteredInvokers.get(1));
         Assertions.assertEquals(invoker3, filteredInvokers.get(2));
+    }
+
+    @Test
+    void testBackupTagRouteHitSingleValue() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        // primary tag online, backup tag preview
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview")
+                .setScopeModel(moduleModel);
+        // no tag at all
+        URL url2 = URL.valueOf("test://127.0.0.1:7778/DemoInterface").setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        Invoker<String> invoker2 = new MockInvoker<>(url2, true);
+        originInvokers.add(invoker1);
+        originInvokers.add(invoker2);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "preview");
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        // primary miss -> backup hit, and no fallback to untagged invoker2
+        Assertions.assertEquals(1, filteredInvokers.size());
+        Assertions.assertEquals(invoker1, filteredInvokers.get(0));
+    }
+
+    @Test
+    void testBackupTagRouteHitMultiValue() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        // backup tag is comma-separated multi-value: preview,gray
+        URL url1 =
+                URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview,gray")
+                        .setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        originInvokers.add(invoker1);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "gray");
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        Assertions.assertEquals(1, filteredInvokers.size());
+        Assertions.assertEquals(invoker1, filteredInvokers.get(0));
+    }
+
+    @Test
+    void testBackupTagRoutePrimaryAndBackupBothHitPrefersPrimary() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        // primary and backup both carry the requested tag
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=preview&dubbo.backup.tag=preview")
+                .setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        originInvokers.add(invoker1);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "preview");
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        Assertions.assertEquals(1, filteredInvokers.size());
+        Assertions.assertEquals(invoker1, filteredInvokers.get(0));
+    }
+
+    @Test
+    void testBackupTagRouteAllMissDegradesToUntaggedByDefault() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        // no provider matches preview on primary or backup; an untagged provider exists
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=gray")
+                .setScopeModel(moduleModel);
+        URL url2 = URL.valueOf("test://127.0.0.1:7778/DemoInterface").setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        Invoker<String> invoker2 = new MockInvoker<>(url2, true);
+        originInvokers.add(invoker1);
+        originInvokers.add(invoker2);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "preview");
+        // force.tag defaults to false: degrade to untagged providers (original semantics)
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        Assertions.assertEquals(1, filteredInvokers.size());
+        Assertions.assertEquals(invoker2, filteredInvokers.get(0));
+    }
+
+    @Test
+    void testBackupTagRouteAllMissReturnEmptyWhenForceTag() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=gray")
+                .setScopeModel(moduleModel);
+        URL url2 = URL.valueOf("test://127.0.0.1:7778/DemoInterface").setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        Invoker<String> invoker2 = new MockInvoker<>(url2, true);
+        originInvokers.add(invoker1);
+        originInvokers.add(invoker2);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "preview");
+        invocation.setAttachment(FORCE_USE_TAG, "true");
+        // force.tag=true: no degradation to untagged providers, return empty
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        Assertions.assertEquals(0, filteredInvokers.size());
+    }
+
+    @Test
+    void testBackupTagRouteMultiInvokerMixed() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online").setScopeModel(moduleModel);
+        URL url2 = URL.valueOf("test://127.0.0.1:7778/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview,gray")
+                .setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        Invoker<String> invoker2 = new MockInvoker<>(url2, true);
+        originInvokers.add(invoker1);
+        originInvokers.add(invoker2);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "preview");
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        Assertions.assertEquals(1, filteredInvokers.size());
+        Assertions.assertEquals(invoker2, filteredInvokers.get(0));
+    }
+
+    @Test
+    void testBackupTagRouteEmptyBackupValue() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        // backup tag explicitly empty
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=")
+                .setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        originInvokers.add(invoker1);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setAttachment(TAG_KEY, "preview");
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), invokers.get(0).getUrl(), invocation, false, new Holder<>());
+        // empty backup -> no match -> empty
+        Assertions.assertEquals(0, filteredInvokers.size());
+    }
+
+    @Test
+    void testBackupTagRouteNoTagRequestReturnsUntagged() {
+        StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
+
+        List<Invoker<String>> originInvokers = new ArrayList<>();
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview")
+                .setScopeModel(moduleModel);
+        URL url2 = URL.valueOf("test://127.0.0.1:7778/DemoInterface").setScopeModel(moduleModel);
+        Invoker<String> invoker1 = new MockInvoker<>(url1, true);
+        Invoker<String> invoker2 = new MockInvoker<>(url2, true);
+        originInvokers.add(invoker1);
+        originInvokers.add(invoker2);
+        BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
+
+        RpcInvocation invocation = new RpcInvocation();
+        // no tag set on request; pass the consumer url (no dubbo.tag) so tag resolves to empty
+        List<Invoker<String>> filteredInvokers =
+                router.route(invokers.clone(), url, invocation, false, new Holder<>());
+        // returns providers without dubbo.tag
+        Assertions.assertEquals(1, filteredInvokers.size());
+        Assertions.assertEquals(invoker2, filteredInvokers.get(0));
     }
 }

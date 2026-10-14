@@ -42,6 +42,7 @@ import java.util.function.Predicate;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANYHOST_VALUE;
 import static org.apache.dubbo.common.constants.CommonConstants.ANY_VALUE;
+import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.TAG_KEY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_EMPTY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_INVALID;
@@ -219,6 +220,14 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                     invokers,
                     invoker ->
                             ANY_VALUE.equals(tag) || tag.equals(invoker.getUrl().getParameter(TAG_KEY)));
+            // If it is empty, then use the backup tag
+            if (CollectionUtils.isEmpty(result)) {
+                result = filterInvoker(
+                        invokers,
+                        invoker -> StringUtils.isContains(
+                                invoker.getUrl().getParameter(BACKUP_TAG_KEY), tag));
+            }
+
             if (CollectionUtils.isEmpty(result) && !isForceUseTag(invocation)) {
                 result = filterInvoker(
                         invokers,
