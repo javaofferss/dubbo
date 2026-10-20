@@ -17,6 +17,7 @@
 package org.apache.dubbo.rpc.protocol.natives.thrift5;
 
 import org.apache.dubbo.common.URL;
+import org.apache.dubbo.common.utils.ConcurrentHashSet;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.protocol.AbstractProxyProtocol;
 import org.apache.dubbo.rpc.protocol.natives.thrift5.transport.DubboHeaderClientTransport;
@@ -26,6 +27,7 @@ import org.apache.dubbo.rpc.protocol.natives.thrift5.transport.DubboHeaderOutput
 import java.lang.reflect.Constructor;
 import java.net.SocketException;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -48,8 +50,11 @@ import org.apache.thrift.transport.*;
  */
 public class Thrift5Protocol extends AbstractProxyProtocol {
 
-    public static final int DEFAULT_PORT = 40880;
+    //记录提供了多少个服务和使用了多少个服务.
+    public static final Set<Class> Export = new ConcurrentHashSet<>();
+    public static final Set<Class> Refer = new ConcurrentHashSet<>();
 
+    public static final int DEFAULT_PORT = 40880;
     public static final String NAME = "thrift5";
     public static final String THRIFT_ASYNC_IFACE_OPEN = "AsyncIface";
     public static final String THRIFT_IFACE = "$Iface";
@@ -81,7 +86,7 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
             ThriftServer server = processExport(url.getPort(), getThriftProcessor(impl, type));
             return server;
         });
-
+        Export.add(type);
         return servers.get(key).runnable;
     }
 
@@ -96,6 +101,7 @@ public class Thrift5Protocol extends AbstractProxyProtocol {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+        Refer.add(type);
         return (T) proxyObject;
     }
 
