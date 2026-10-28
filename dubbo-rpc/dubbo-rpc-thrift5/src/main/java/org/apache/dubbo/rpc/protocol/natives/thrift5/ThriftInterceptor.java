@@ -16,6 +16,7 @@
  */
 package org.apache.dubbo.rpc.protocol.natives.thrift5;
 
+import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +59,7 @@ public class ThriftInterceptor {
                         switch (type) {
                             case TTransportException.END_OF_FILE: // 连接关闭了. 当然还有其他的。这里暂时不处理了
                                 pool.invalidateObject(key, client); // 直接无效
+                                closeClient(client);
                                 return;
                             default:
                                 break;
@@ -68,6 +70,17 @@ public class ThriftInterceptor {
                 }
             }
             pool.returnObject(key, client);
+        }
+    }
+
+    private void closeClient(Object o){
+        try {
+            if(o instanceof TTransport){
+                TTransport transport = (TTransport) o;
+                transport.close();
+            }
+        }catch (Exception e){
+            //ignore
         }
     }
 
