@@ -48,7 +48,7 @@ import org.apache.thrift.transport.*;
 /**
  * 支持thrift序列化0.5版本
  */
-public class Thrift5Protocol extends AbstractProxyProtocol {
+public class Thrift5Protocol extends AbstractThriftProxyProtocol {
 
     //记录提供了多少个服务和使用了多少个服务.
     public static final Set<Class> Export = new ConcurrentHashSet<>();
