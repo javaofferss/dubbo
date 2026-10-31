@@ -18,6 +18,7 @@ package org.apache.dubbo.rpc.protocol.natives.thrift5.filter;
 
 import org.apache.dubbo.common.constants.CommonConstants;
 import org.apache.dubbo.common.extension.Activate;
+import org.apache.dubbo.rpc.AsyncRpcResult;
 import org.apache.dubbo.rpc.Filter;
 import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.Invoker;
@@ -48,25 +49,11 @@ public class Thrift5HeaderConsumerFilter implements Filter {
         if (!Thrift5Protocol.NAME.equals(invoker.getUrl().getProtocol())) {
             return invoker.invoke(inv);
         }
-
-        Map<String, Object> hdr = new LinkedHashMap<>();
-        //可以看这个类 {@link ConsumerContextFilter} 支持 attachments 全链路透传.
-        Map<String, Object> invAtt = inv.getObjectAttachments();
-        if (invAtt != null) {
-            hdr.putAll(invAtt); // tracing/token 等外层 filter 注入的在此
-        }
-        Map<String, Object> clientAtt = RpcContext.getClientAttachment().getObjectAttachments();
-        if (clientAtt != null && !clientAtt.isEmpty()) {
-            hdr.putAll(clientAtt); // 用户直接 RpcContext.setAttachment 的在此
-        }
-
-        Thrift5AttachmentHolder.set(hdr);
         try {
-            // → AbstractInvoker.doInvoke → ThriftPoolDirectProxy → thriftClient.send_X →
-            // DubboHeaderClientTransport.flush()
             return invoker.invoke(inv);
-        } finally {
-            Thrift5AttachmentHolder.clear();
+        } catch (Exception e) {
+           return AsyncRpcResult.newDefaultAsyncResult(e, inv);
         }
+
     }
 }

@@ -8,11 +8,15 @@ import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.InvokeMode;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.Result;
+import org.apache.dubbo.rpc.RpcContext;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.protocol.AbstractInvoker;
 import org.apache.dubbo.rpc.protocol.AbstractProxyProtocol;
+import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5AttachmentHolder;
 import org.apache.dubbo.rpc.support.RpcUtils;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -34,7 +38,9 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
     @Override
     protected <T> Invoker<T> protocolBindingRefer(final Class<T> type, final URL url) throws RpcException {
         final Invoker<T> target = proxyFactory.getInvoker(doRefer(type, url), type, url);
+        ExecutorService executorServiceInvoker = getOrCreateCallbackExecutor(url);
         Invoker<T> invoker = new AbstractInvoker<T>(type, url) {
+            ExecutorService executorService = executorServiceInvoker;
             @Override
             protected Result doInvoke(Invocation invocation) throws Throwable {
                 try {
@@ -51,8 +57,26 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
 
                     //参考DubboInvoker. 这里直接做timeout检查，不依赖 waitForResultIfSync.
                     ExecutorService executor = getCallbackExecutor(getUrl(), invocation, timeout);
-                    Result result = executor.submit(() -> target.invoke(invocation))
-                            .get(timeout, TimeUnit.MILLISECONDS);
+
+                    Map<String, Object> hdr = new LinkedHashMap<>();
+                    //可以看这个类 {@link ConsumerContextFilter} 支持 attachments 全链路透传.
+                    Map<String, Object> invAtt = invocation.getObjectAttachments();
+                    if (invAtt != null) {
+                        hdr.putAll(invAtt); // tracing/token 等外层 filter 注入的在此
+                    }
+                    Map<String, Object> clientAtt = RpcContext.getClientAttachment().getObjectAttachments();
+                    if (clientAtt != null && !clientAtt.isEmpty()) {
+                        hdr.putAll(clientAtt); // 用户直接 RpcContext.setAttachment 的在此
+                    }
+
+                    Result result = executor.submit(() -> {
+                        try {
+                            Thrift5AttachmentHolder.set(hdr);
+                            return target.invoke(invocation);
+                        } finally {
+                            Thrift5AttachmentHolder.clear();
+                        }
+                    }).get(timeout, TimeUnit.MILLISECONDS);
                     // FIXME result is an AsyncRpcResult instance.
                     Throwable e = result.getException();
 
@@ -84,8 +108,7 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
                 if (timeout == Integer.MAX_VALUE && InvokeMode.SYNC == RpcUtils.getInvokeMode(getUrl(), inv)) {
                     return DIRECT_EXECUTOR;
                 }
-                return ExecutorRepository.getInstance(url.getOrDefaultApplicationModel())
-                        .getExecutor(url);
+                return executorService;
             }
 
             @Override
@@ -98,6 +121,11 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
         };
         invokers.add(invoker);
         return invoker;
+    }
+
+    protected ExecutorService getOrCreateCallbackExecutor(URL url) {
+        return ExecutorRepository.getInstance(url.getOrDefaultApplicationModel())
+                .createExecutorIfAbsent(url);
     }
 
 }
