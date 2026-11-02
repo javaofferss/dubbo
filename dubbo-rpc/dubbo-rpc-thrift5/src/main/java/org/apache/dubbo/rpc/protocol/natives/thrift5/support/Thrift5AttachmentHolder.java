@@ -16,6 +16,8 @@
  */
 package org.apache.dubbo.rpc.protocol.natives.thrift5.support;
 
+import com.alibaba.ttl.TransmittableThreadLocal;
+
 import java.util.Map;
 
 /**
@@ -32,7 +34,7 @@ import java.util.Map;
  */
 public final class Thrift5AttachmentHolder {
 
-    private static final ThreadLocal<Map<String, Object>> HOLDER = new ThreadLocal<>();
+    private static final ThreadLocal<Map<String, Object>> HOLDER = new TransmittableThreadLocal<>();
 
     private Thrift5AttachmentHolder() {}
 

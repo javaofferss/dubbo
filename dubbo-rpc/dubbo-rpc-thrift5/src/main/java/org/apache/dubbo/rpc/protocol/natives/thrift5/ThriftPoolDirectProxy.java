@@ -45,7 +45,9 @@ public class ThriftPoolDirectProxy {
             "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool;\n"
                     + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool.EndPoint;\n"
                     + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftInterceptor;\n"
-                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.*;\n";
+                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.*;"
+                    + "import java.util.concurrent.*;"
+                    + "import java.lang.*;\n";
 
     static String IMPORT = "import %s; \n";
     static String CLASS = "public class ThriftPoolDirectProxy$%s implements %s { \n";
@@ -61,22 +63,25 @@ public class ThriftPoolDirectProxy {
 
     static String METHOD = "\npublic %s %s( %s )";
     static String METHOD_E = " {";
-    static String METHOD_I = "Object o = null; Exception errObj = null;" + "        try {\n"
+    static String METHOD_I = "Object o = null; "
+            + "             Exception errObj = null;" + "       "
+            + " try {\n"
             + "            o = thriftInterceptor.borrowClient(pool, key);\n"
+            + "            final Object client = o;"
             + "            thriftInterceptor.before(o, \"%s\", %s);\n";
     static String METHOD_I_RETURN =
-            " %s res = Thrift5ExecutorHolder.exec(new Callable<Object>() {\n" + "           "
+            " Object res = Thrift5ExecutorHolder.exec(new Callable<Object>() {\n" + "           "
             + "     @Override\n"
-            + "     public Object call() throws Exception {\n" + "             "
-            + "        return ((%s)o).%s( %s ) ;\n"
-            + "     }\n" + "        "
+            + "     public Object call() throws %s {\n" + "             "
+            + "        return ((%s)client).%s( %s ) ;\n"
+            + "     }\n"
             + " });"
-            + " thriftInterceptor.success(o, \"%s\", res, %s); return res; \n";
+            + " thriftInterceptor.success(o, \"%s\", res, %s); return %s ; \n";
     static String METHOD_I_VOID =
             "  Thrift5ExecutorHolder.exec(new Runnable() {\n" + "\n" + "   "
             + "      @Override\n"
-            + "      public void run() {"
-            + "         ((%s)o).%s( %s ); "
+            + "      public void run() throws %s\n{"
+            + "         ((%s)client).%s( %s ); "
             + "     }\n"
             + "  });"
             + " thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
@@ -126,7 +131,7 @@ public class ThriftPoolDirectProxy {
         code.append(CLASS_END);
         SimpleCompiler compiler = new SimpleCompiler();
         compiler.setParentClassLoader(type.getClassLoader());
-
+        System.out.println(code.toString());
         // 编译源代码
         compiler.cook(new StringReader(code.toString()));
         // 加载编译后的类
@@ -138,6 +143,7 @@ public class ThriftPoolDirectProxy {
     private static void processMethods(List<Method> declaredMethods, StringBuilder code, String faceClassNameCode) {
         for (Method method : declaredMethods) {
             if (Modifier.isAbstract(method.getModifiers())) {
+                String throwsClause = getThrowsClause(method);
                 // 获取返回类型;
                 Class<?> returnType = method.getReturnType();
                 String methodName = method.getName();
@@ -152,6 +158,7 @@ public class ThriftPoolDirectProxy {
                         pcs.append(",");
                         pcObjs.append(",");
                     }
+                    pcs.append("final ");
                     pcs.append(pc.getName());
                     pcs.append(" ");
                     pcs.append(arg);
@@ -168,20 +175,50 @@ public class ThriftPoolDirectProxy {
                 code.append(String.format(METHOD_I, methodName, pcObjs));
                 if (returnType == Void.class || returnType == void.class) {
                     code.append(
-                            String.format(METHOD_I_VOID, faceClassNameCode, methodName, pcObjs, methodName, pcObjs));
+                            String.format(METHOD_I_VOID, throwsClause, faceClassNameCode, methodName, pcObjs, methodName, pcObjs));
                 } else {
                     code.append(String.format(
                             METHOD_I_RETURN,
-                            returnType.getName(),
+                            throwsClause,
                             faceClassNameCode,
                             methodName,
                             pcObjs,
                             methodName,
-                            pcObjs));
+                            pcObjs,
+                            unboxExpr(returnType.getName())));
                 }
                 code.append(String.format(METHOD_I3, methodName, methodName));
                 code.append(METHOD_END);
             }
+        }
+    }
+
+    public static String getThrowsClause(Method method) {
+        Class<?>[] exTypes = method.getExceptionTypes();
+        if (exTypes.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < exTypes.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(exTypes[i].getName());   // 用全限定名，Janino 最稳
+        }
+        return sb.toString();
+    }
+
+    public static String unboxExpr(String typeName) {
+        switch (typeName) {
+            case "int":     return "((Integer) res).intValue()";
+            case "long":    return "((Long) res).longValue()";
+            case "short":   return "((Short) res).shortValue()";
+            case "byte":    return "((Byte) res).byteValue()";
+            case "char":    return "((Character) res).charValue()";
+            case "boolean": return "((Boolean) res).booleanValue()";
+            case "float":   return "((Float) res).floatValue()";
+            case "double":  return "((Double) res).doubleValue()";
+            default:
+                // 引用类型（String、List 等）直接强转
+                return "(" + typeName + ") res";
         }
     }
 

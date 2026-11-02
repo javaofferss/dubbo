@@ -1,6 +1,7 @@
 
 package org.apache.dubbo.rpc.protocol.natives.thrift5;
 
+import com.alibaba.ttl.threadpool.TtlExecutors;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.threadpool.manager.ExecutorRepository;
 import org.apache.dubbo.rpc.AsyncRpcResult;
@@ -96,8 +97,8 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
     }
 
     protected ExecutorService getOrCreateCallbackExecutor(URL url) {
-        return ExecutorRepository.getInstance(url.getOrDefaultApplicationModel())
-                .createExecutorIfAbsent(url);
+        return TtlExecutors.getTtlExecutorService(ExecutorRepository.getInstance(url.getOrDefaultApplicationModel())
+                .createExecutorIfAbsent(url));
     }
 
 }
