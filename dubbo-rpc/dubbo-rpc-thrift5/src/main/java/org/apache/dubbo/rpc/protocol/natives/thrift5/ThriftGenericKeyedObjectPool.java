@@ -74,6 +74,10 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
         public String toString() {
             return url.toString();
         }
+
+        public URL getUrl() {
+            return url;
+        }
     }
 
     public static ThriftGenericKeyedObjectPool getInstance(BiFunction<Class, URL, Object> processRefer) {

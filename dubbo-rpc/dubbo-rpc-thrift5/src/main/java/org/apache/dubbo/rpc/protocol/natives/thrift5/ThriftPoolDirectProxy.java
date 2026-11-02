@@ -44,7 +44,8 @@ public class ThriftPoolDirectProxy {
     static String DEFAULT_IMPORT =
             "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool;\n"
                     + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool.EndPoint;\n"
-                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftInterceptor;\n";
+                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftInterceptor;\n"
+                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.*;\n";
 
     static String IMPORT = "import %s; \n";
     static String CLASS = "public class ThriftPoolDirectProxy$%s implements %s { \n";
@@ -64,9 +65,21 @@ public class ThriftPoolDirectProxy {
             + "            o = thriftInterceptor.borrowClient(pool, key);\n"
             + "            thriftInterceptor.before(o, \"%s\", %s);\n";
     static String METHOD_I_RETURN =
-            "  %s res = ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", res, %s); return res; \n";
+            " %s res = Thrift5ExecutorHolder.exec(new Callable<Object>() {\n" + "           "
+            + "     @Override\n"
+            + "     public Object call() throws Exception {\n" + "             "
+            + "        return ((%s)o).%s( %s ) ;\n"
+            + "     }\n" + "        "
+            + " });"
+            + " thriftInterceptor.success(o, \"%s\", res, %s); return res; \n";
     static String METHOD_I_VOID =
-            "  ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
+            "  Thrift5ExecutorHolder.exec(new Runnable() {\n" + "\n" + "   "
+            + "      @Override\n"
+            + "      public void run() {"
+            + "         ((%s)o).%s( %s ); "
+            + "     }\n"
+            + "  });"
+            + " thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
     static String METHOD_I3 = " } catch (Exception e) {\n" + "            e.printStackTrace();\n"
             + "            thriftInterceptor.error(o, \"%s\", e); errObj = e; \n"
             + "            throw new RuntimeException(e);\n"

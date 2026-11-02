@@ -48,7 +48,7 @@ import static org.apache.dubbo.common.constants.LoggerCodeConstants.PROTOCOL_UNS
 
 public abstract class AbstractProxyProtocol extends AbstractProtocol {
 
-    private final List<Class<?>> rpcExceptions = new CopyOnWriteArrayList<>();
+    protected final List<Class<?>> rpcExceptions = new CopyOnWriteArrayList<>();
 
     protected ProxyFactory proxyFactory;
 
