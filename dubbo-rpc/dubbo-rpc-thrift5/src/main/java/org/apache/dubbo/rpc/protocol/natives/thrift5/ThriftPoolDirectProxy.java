@@ -23,6 +23,10 @@ import java.io.StringReader;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.function.BiFunction;
 
 import org.codehaus.janino.SimpleCompiler;
@@ -40,7 +44,10 @@ public class ThriftPoolDirectProxy {
     static String DEFAULT_IMPORT =
             "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool;\n"
                     + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool.EndPoint;\n"
-                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftInterceptor;\n";
+                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftInterceptor;\n"
+                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.*;"
+                    + "import java.util.concurrent.*;"
+                    + "import java.lang.*;\n";
 
     static String IMPORT = "import %s; \n";
     static String CLASS = "public class ThriftPoolDirectProxy$%s implements %s { \n";
@@ -56,19 +63,41 @@ public class ThriftPoolDirectProxy {
 
     static String METHOD = "\npublic %s %s( %s )";
     static String METHOD_E = " {";
-    static String METHOD_I = "Object o = null; Exception errObj = null;" + "        try {\n"
+    static String METHOD_I = "Object o = null; "
+            + "             Exception errObj = null;" + "       "
+            + " try {\n"
             + "            o = thriftInterceptor.borrowClient(pool, key);\n"
+            + "            final Object client = o;"
             + "            thriftInterceptor.before(o, \"%s\", %s);\n";
+
     static String METHOD_I_RETURN =
-            "  %s res = ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", res, %s); return res; \n";
+            " Object res = Thrift5ExecutorHolder.exec(new Callable<Object>() {\n" + "           "
+            + "     @Override\n"
+            + "     public Object call() throws %s {\n"
+            + "      Exception errInnerObj = null;       "
+            + "      try{  return ((%s)client).%s( %s ) ; } catch (Exception e) { errInnerObj = e; throw e; }"
+            + "      finally { thriftInterceptor.recycleClient(pool, key, client, errInnerObj); }\n"
+            + "     }\n"
+            + " });"
+            + " thriftInterceptor.success(o, \"%s\", res, %s); return %s ; \n";
+
     static String METHOD_I_VOID =
-            "  ((%s)o).%s( %s ); thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
+            "  Thrift5ExecutorHolder.exec(new Runnable() {\n"
+            + "      @Override\n"
+            + "      public void run() throws %s\n{ "
+            + "       Exception errInnerObj = null;  "
+            + "       try{   ((%s)client).%s( %s ); } catch (Exception e) { errInnerObj = e; throw e; } "
+            + "       finally { thriftInterceptor.recycleClient(pool, key, client, errInnerObj); }\n"
+            + "     }\n"
+            + "  });"
+            + " thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
+
     static String METHOD_I3 = " } catch (Exception e) {\n" + "            e.printStackTrace();\n"
             + "            thriftInterceptor.error(o, \"%s\", e); errObj = e; \n"
             + "            throw new RuntimeException(e);\n"
             + "        } finally {\n"
             + "            thriftInterceptor.over(o, \"%s\");\n"
-            + "            thriftInterceptor.recycleClient(pool, key, o, errObj);\n"
+            + "            \n"
             + "        }";
     static String METHOD_END = "}";
 
@@ -102,14 +131,14 @@ public class ThriftPoolDirectProxy {
         code.append(String.format(C, simpleClassName));
 
         // 实现抽象方法
-        Method[] declaredMethods = syncIfaceClass.getDeclaredMethods();
+        List<Method> declaredMethods = getMethods(syncIfaceClass);
         processMethods(declaredMethods, code, syncIfaceClassNameCode);
-        Method[] declaredMethods2 = asyncIfaceClass.getDeclaredMethods();
+        List<Method> declaredMethods2 = getMethods(asyncIfaceClass);
         processMethods(declaredMethods2, code, asyncIfaceClassNameCode);
         code.append(CLASS_END);
         SimpleCompiler compiler = new SimpleCompiler();
         compiler.setParentClassLoader(type.getClassLoader());
-
+        System.out.println(code.toString());
         // 编译源代码
         compiler.cook(new StringReader(code.toString()));
         // 加载编译后的类
@@ -118,9 +147,10 @@ public class ThriftPoolDirectProxy {
         return proxyClass;
     }
 
-    private static void processMethods(Method[] declaredMethods, StringBuilder code, String faceClassNameCode) {
+    private static void processMethods(List<Method> declaredMethods, StringBuilder code, String faceClassNameCode) {
         for (Method method : declaredMethods) {
             if (Modifier.isAbstract(method.getModifiers())) {
+                String throwsClause = getThrowsClause(method);
                 // 获取返回类型;
                 Class<?> returnType = method.getReturnType();
                 String methodName = method.getName();
@@ -135,6 +165,7 @@ public class ThriftPoolDirectProxy {
                         pcs.append(",");
                         pcObjs.append(",");
                     }
+                    pcs.append("final ");
                     pcs.append(pc.getName());
                     pcs.append(" ");
                     pcs.append(arg);
@@ -151,20 +182,50 @@ public class ThriftPoolDirectProxy {
                 code.append(String.format(METHOD_I, methodName, pcObjs));
                 if (returnType == Void.class || returnType == void.class) {
                     code.append(
-                            String.format(METHOD_I_VOID, faceClassNameCode, methodName, pcObjs, methodName, pcObjs));
+                            String.format(METHOD_I_VOID, throwsClause, faceClassNameCode, methodName, pcObjs, methodName, pcObjs));
                 } else {
                     code.append(String.format(
                             METHOD_I_RETURN,
-                            returnType.getName(),
+                            throwsClause,
                             faceClassNameCode,
                             methodName,
                             pcObjs,
                             methodName,
-                            pcObjs));
+                            pcObjs,
+                            unboxExpr(returnType.getName())));
                 }
                 code.append(String.format(METHOD_I3, methodName, methodName));
                 code.append(METHOD_END);
             }
+        }
+    }
+
+    public static String getThrowsClause(Method method) {
+        Class<?>[] exTypes = method.getExceptionTypes();
+        if (exTypes.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < exTypes.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(exTypes[i].getName());   // 用全限定名，Janino 最稳
+        }
+        return sb.toString();
+    }
+
+    public static String unboxExpr(String typeName) {
+        switch (typeName) {
+            case "int":     return "((Integer) res).intValue()";
+            case "long":    return "((Long) res).longValue()";
+            case "short":   return "((Short) res).shortValue()";
+            case "byte":    return "((Byte) res).byteValue()";
+            case "char":    return "((Character) res).charValue()";
+            case "boolean": return "((Boolean) res).booleanValue()";
+            case "float":   return "((Float) res).floatValue()";
+            case "double":  return "((Double) res).doubleValue()";
+            default:
+                // 引用类型（String、List 等）直接强转
+                return "(" + typeName + ") res";
         }
     }
 
@@ -183,5 +244,34 @@ public class ThriftPoolDirectProxy {
             throwable.printStackTrace();
         }
         return ThriftPoolProxy.getProxyObject(clazz, url, processRefer);
+    }
+
+    public static List<Method> getMethods(Class clazz) {
+        Set<Class> extendsInterfaces = getExtendsInterfaces(clazz);
+        extendsInterfaces.add(clazz);
+        ArrayList<Method> list = new ArrayList<>();
+
+        for(Class c : extendsInterfaces){
+            Method[] declaredMethods = c.getDeclaredMethods();
+            for (Method method : declaredMethods) {
+                list.add(method);
+            }
+        }
+
+        return list;
+    }
+
+    public static Set<Class> getExtendsInterfaces(Class clazz) {
+        Set<Class> list = new HashSet<>();
+        if(!clazz.isInterface()) {
+            return list;
+        }
+        Class[] interfaces = clazz.getInterfaces();
+        for (Class suClass : interfaces) {
+            list.add(suClass);
+            list.addAll(getExtendsInterfaces(suClass));
+        }
+
+        return list;
     }
 }

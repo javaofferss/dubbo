@@ -62,12 +62,15 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
 
         @Override
         public boolean equals(Object obj) {
-            return toString().equals(obj.toString());
+            if(obj instanceof EndPoint){
+                ((EndPoint<?>) obj).url.equals(this.url);
+            }
+            return false;
         }
 
         @Override
         public int hashCode() {
-            return toString().hashCode();
+            return this.url.hashCode();
         }
 
         @Override

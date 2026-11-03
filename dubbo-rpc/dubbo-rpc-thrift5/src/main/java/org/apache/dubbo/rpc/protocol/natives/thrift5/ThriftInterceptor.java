@@ -54,8 +54,19 @@ public class ThriftInterceptor {
             // 再判断是否有异常。这里的逻辑就不具体写了。主要可以判断一下socket是否关闭了。如果关闭了就不应该放回了，应该直接销毁异常的客户端
             if (throwable != null) {
                 try {
+                    Throwable cause = throwable.getCause();
                     if (throwable instanceof TTransportException) {
                         int type = ((TTransportException) throwable).getType();
+                        switch (type) {
+                            case TTransportException.END_OF_FILE: // 连接关闭了. 当然还有其他的。这里暂时不处理了
+                                pool.invalidateObject(key, client); // 直接无效
+                                closeClient(client);
+                                return;
+                            default:
+                                break;
+                        }
+                    }else if(cause instanceof TTransportException){
+                        int type = ((TTransportException) cause).getType();
                         switch (type) {
                             case TTransportException.END_OF_FILE: // 连接关闭了. 当然还有其他的。这里暂时不处理了
                                 pool.invalidateObject(key, client); // 直接无效

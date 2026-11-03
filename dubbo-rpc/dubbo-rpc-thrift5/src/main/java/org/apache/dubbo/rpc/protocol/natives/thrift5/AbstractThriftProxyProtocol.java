@@ -1,6 +1,7 @@
 
 package org.apache.dubbo.rpc.protocol.natives.thrift5;
 
+import com.alibaba.ttl.threadpool.TtlExecutors;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.threadpool.manager.ExecutorRepository;
 import org.apache.dubbo.rpc.AsyncRpcResult;
@@ -8,18 +9,12 @@ import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.InvokeMode;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.Result;
-import org.apache.dubbo.rpc.RpcContext;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.protocol.AbstractInvoker;
 import org.apache.dubbo.rpc.protocol.AbstractProxyProtocol;
-import org.apache.dubbo.rpc.protocol.natives.thrift5.support.Thrift5AttachmentHolder;
 import org.apache.dubbo.rpc.support.RpcUtils;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.apache.dubbo.rpc.protocol.natives.thrift5.ThreadlessDirectExecutor.DIRECT_EXECUTOR;
 
@@ -57,29 +52,11 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
 
                     //参考DubboInvoker. 这里直接做timeout检查，不依赖 waitForResultIfSync.
                     ExecutorService executor = getCallbackExecutor(getUrl(), invocation, timeout);
-
-                    Map<String, Object> hdr = new LinkedHashMap<>();
-                    //可以看这个类 {@link ConsumerContextFilter} 支持 attachments 全链路透传.
-                    Map<String, Object> invAtt = invocation.getObjectAttachments();
-                    if (invAtt != null) {
-                        hdr.putAll(invAtt); // tracing/token 等外层 filter 注入的在此
-                    }
-                    Map<String, Object> clientAtt = RpcContext.getClientAttachment().getObjectAttachments();
-                    if (clientAtt != null && !clientAtt.isEmpty()) {
-                        hdr.putAll(clientAtt); // 用户直接 RpcContext.setAttachment 的在此
-                    }
-
-                    Result result = executor.submit(() -> {
-                        try {
-                            Thrift5AttachmentHolder.set(hdr);
-                            return target.invoke(invocation);
-                        } finally {
-                            Thrift5AttachmentHolder.clear();
-                        }
-                    }).get(timeout, TimeUnit.MILLISECONDS);
+                    //这里因为dubbo的限制，不能直接使用线程池调用.
+                    Thrift5ExecutorHolder.set(new ThriftExecutor(executor, timeout));
+                    Result result =  target.invoke(invocation);;
                     // FIXME result is an AsyncRpcResult instance.
                     Throwable e = result.getException();
-
                     if (e != null) {
                         for (Class<?> rpcException : rpcExceptions) {
                             if (rpcException.isAssignableFrom(e.getClass())) {
@@ -88,12 +65,6 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
                         }
                     }
                     return result;
-                } catch (TimeoutException  e) {
-                    throw new RpcException(
-                            RpcException.TIMEOUT_EXCEPTION,
-                            "Invoke remote method timeout. method: " + RpcUtils.getMethodName(invocation) + ", provider: "
-                                    + getUrl() + ", cause: " + e.getMessage(),
-                            e);
                 } catch (RpcException e) {
                     if (e.getCode() == RpcException.UNKNOWN_EXCEPTION) {
                         e.setCode(getErrorCode(e.getCause()));
@@ -101,6 +72,8 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
                     throw e;
                 } catch (Throwable e) {
                     throw getRpcException(type, url, invocation, e);
+                }finally {
+                    Thrift5ExecutorHolder.clear();
                 }
             }
 
@@ -124,8 +97,8 @@ public abstract class AbstractThriftProxyProtocol extends AbstractProxyProtocol 
     }
 
     protected ExecutorService getOrCreateCallbackExecutor(URL url) {
-        return ExecutorRepository.getInstance(url.getOrDefaultApplicationModel())
-                .createExecutorIfAbsent(url);
+        return TtlExecutors.getTtlExecutorService(ExecutorRepository.getInstance(url.getOrDefaultApplicationModel())
+                .createExecutorIfAbsent(url));
     }
 
 }

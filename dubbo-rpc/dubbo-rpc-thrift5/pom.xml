@@ -16,7 +16,6 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
   <dependencies>
-
     <dependency>
       <groupId>org.apache.dubbo</groupId>
       <artifactId>dubbo-common</artifactId>
@@ -37,6 +36,12 @@
       <groupId>org.codehaus.janino</groupId>
       <artifactId>janino</artifactId>
       <version>3.1.12</version>
+    </dependency>
+
+    <dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>transmittable-thread-local</artifactId>
+      <version>2.14.5</version>
     </dependency>
 
     <dependency>

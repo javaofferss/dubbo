@@ -156,10 +156,6 @@ public abstract class AbstractProxyProtocol extends AbstractProtocol {
         return re;
     }
 
-    public List<Class<?>> getRpcExceptions() {
-        return rpcExceptions;
-    }
-
     protected String getAddr(URL url) {
         String bindIp = url.getParameter(Constants.BIND_IP_KEY, url.getHost());
         if (url.getParameter(ANYHOST_KEY, false)) {
