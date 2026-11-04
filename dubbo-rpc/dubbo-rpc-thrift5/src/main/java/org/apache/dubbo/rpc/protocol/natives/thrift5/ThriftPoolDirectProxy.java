@@ -42,11 +42,8 @@ public class ThriftPoolDirectProxy {
 
     static String PACKAGE = "package %s; \n";
     static String DEFAULT_IMPORT =
-            "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool;\n"
-                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool.EndPoint;\n"
-                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftInterceptor;\n"
-                    + "import org.apache.dubbo.rpc.protocol.natives.thrift5.*;"
-                    + "import java.util.concurrent.*;"
+                      "import org.apache.dubbo.rpc.protocol.natives.thrift5.*;\n"
+                    + "import java.util.concurrent.*;\n"
                     + "import java.lang.*;\n";
 
     static String IMPORT = "import %s; \n";
@@ -56,49 +53,50 @@ public class ThriftPoolDirectProxy {
     static String PRO3 = "ThriftInterceptor thriftInterceptor = new ThriftInterceptor();\n";
 
     static String C =
-            "\npublic ThriftPoolDirectProxy$%s(org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool pool, org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool.EndPoint key) { "
+            "public ThriftPoolDirectProxy$%s(org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool pool, org.apache.dubbo.rpc.protocol.natives.thrift5.ThriftGenericKeyedObjectPool.EndPoint key) { \n"
                     + "        this.pool = pool;"
                     + "        this.key = key;"
                     + "    }";
 
     static String METHOD = "\npublic %s %s( %s )";
     static String METHOD_E = " {";
-    static String METHOD_I = "Object o = null; "
-            + "             Exception errObj = null;" + "       "
-            + " try {\n"
-            + "            o = thriftInterceptor.borrowClient(pool, key);\n"
-            + "            final Object client = o;"
-            + "            thriftInterceptor.before(o, \"%s\", %s);\n";
+    static String METHOD_I =
+              " Exception errObj = null;" + "       "
+            + " try { \n"
+            + "     thriftInterceptor.before(key, \"%s\", %s);\n";
 
     static String METHOD_I_RETURN =
-            " Object res = Thrift5ExecutorHolder.exec(new Callable<Object>() {\n" + "           "
-            + "     @Override\n"
-            + "     public Object call() throws %s {\n"
-            + "      Exception errInnerObj = null;       "
-            + "      try{  return ((%s)client).%s( %s ) ; } catch (Exception e) { errInnerObj = e; throw e; }"
-            + "      finally { thriftInterceptor.recycleClient(pool, key, client, errInnerObj); }\n"
-            + "     }\n"
-            + " });"
-            + " thriftInterceptor.success(o, \"%s\", res, %s); return %s ; \n";
+            "       Object res = Thrift5ExecutorHolder.exec(new Callable<Object>() {\n" + "           "
+            + "          @Override\n"
+            + "          public Object call() throws %s {\n"
+            + "          Exception errInnerObj = null;    "
+            + "          final Object client = thriftInterceptor.borrowClient(pool, key);   "
+            + "          try{  return ((%s)client).%s( %s ) ; } catch (Exception e) { errInnerObj = e; throw e; }"
+            + "          finally { thriftInterceptor.recycleClient(pool, key, client, errInnerObj); }\n"
+            + "       }\n"
+            + "     });"
+            + "    thriftInterceptor.success(key, \"%s\", res, %s); return %s ; \n";
 
     static String METHOD_I_VOID =
-            "  Thrift5ExecutorHolder.exec(new Runnable() {\n"
-            + "      @Override\n"
-            + "      public void run() throws %s\n{ "
-            + "       Exception errInnerObj = null;  "
-            + "       try{   ((%s)client).%s( %s ); } catch (Exception e) { errInnerObj = e; throw e; } "
-            + "       finally { thriftInterceptor.recycleClient(pool, key, client, errInnerObj); }\n"
-            + "     }\n"
-            + "  });"
-            + " thriftInterceptor.success(o, \"%s\", void.class, %s); return ; \n";
+            "      Thrift5ExecutorHolder.exec(new Runnable() {\n"
+            + "          @Override\n"
+            + "          public void run() throws %s\n{ "
+            + "          Exception errInnerObj = null;  "
+            + "          final Object client = thriftInterceptor.borrowClient(pool, key);   "
+            + "          try{   ((%s)client).%s( %s ); } catch (Exception e) { errInnerObj = e; throw e; } "
+            + "          finally { thriftInterceptor.recycleClient(pool, key, client, errInnerObj); }\n"
+            + "       }\n"
+            + "     });"
+            + "    thriftInterceptor.success(key, \"%s\", void.class, %s); return ; \n";
 
-    static String METHOD_I3 = " } catch (Exception e) {\n" + "            e.printStackTrace();\n"
-            + "            thriftInterceptor.error(o, \"%s\", e); errObj = e; \n"
-            + "            throw new RuntimeException(e);\n"
-            + "        } finally {\n"
-            + "            thriftInterceptor.over(o, \"%s\");\n"
-            + "            \n"
-            + "        }";
+    static String METHOD_I3 =
+            "  } catch (Exception e) {\n"
+            + "     e.printStackTrace();\n"
+            + "     thriftInterceptor.error(key, \"%s\", e); errObj = e; \n"
+            + "     throw new RuntimeException(e);\n"
+            + " } finally {\n"
+            + "     thriftInterceptor.over(key, \"%s\");\n"
+            + " }";
     static String METHOD_END = "}";
 
     static String CLASS_END = "}";
@@ -109,21 +107,23 @@ public class ThriftPoolDirectProxy {
         int idx = Math.max(typeName.indexOf(THRIFT_ASYNC_IFACE), typeName.indexOf(THRIFT_IFACE));
         String serviceClassName = typeName.substring(0, idx);
         String simpleClassName = serviceClassName.substring(serviceClassName.lastIndexOf(".") + 1);
-        String asyncIfaceClassName = serviceClassName + THRIFT_ASYNC_IFACE;
-        Class<?> asyncIfaceClass = Class.forName(asyncIfaceClassName);
+//        String asyncIfaceClassName = serviceClassName + THRIFT_ASYNC_IFACE;
+//        Class<?> asyncIfaceClass = Class.forName(asyncIfaceClassName);
         String syncIfaceClassName = serviceClassName + THRIFT_IFACE;
         Class<?> syncIfaceClass = Class.forName(syncIfaceClassName);
 
         String syncIfaceClassNameCode = syncIfaceClassName.replace("$", ".");
-        String asyncIfaceClassNameCode = asyncIfaceClassName.replace("$", ".");
+//        String asyncIfaceClassNameCode = asyncIfaceClassName.replace("$", ".");
         // 生产代码.
         StringBuilder code = new StringBuilder();
         code.append(String.format(PACKAGE, packageName));
         code.append(DEFAULT_IMPORT);
         code.append(String.format(IMPORT, syncIfaceClassNameCode));
-        code.append(String.format(IMPORT, asyncIfaceClassNameCode));
-        code.append(String.format(CLASS, simpleClassName, syncIfaceClassNameCode + "," + asyncIfaceClassNameCode));
+        code.append(String.format(CLASS, simpleClassName, syncIfaceClassNameCode));
+//        code.append(String.format(IMPORT, asyncIfaceClassNameCode));
+//        code.append(String.format(CLASS, simpleClassName, syncIfaceClassNameCode + "," + asyncIfaceClassNameCode));
         //        code.append(String.format(LOG,simpleClassName));
+
         code.append(PRO1);
         code.append(PRO2);
         code.append(PRO3);
@@ -133,8 +133,8 @@ public class ThriftPoolDirectProxy {
         // 实现抽象方法
         List<Method> declaredMethods = getMethods(syncIfaceClass);
         processMethods(declaredMethods, code, syncIfaceClassNameCode);
-        List<Method> declaredMethods2 = getMethods(asyncIfaceClass);
-        processMethods(declaredMethods2, code, asyncIfaceClassNameCode);
+//        List<Method> declaredMethods2 = getMethods(asyncIfaceClass);
+//        processMethods(declaredMethods2, code, asyncIfaceClassNameCode);
         code.append(CLASS_END);
         SimpleCompiler compiler = new SimpleCompiler();
         compiler.setParentClassLoader(type.getClassLoader());
@@ -205,9 +205,12 @@ public class ThriftPoolDirectProxy {
         if (exTypes.length == 0) {
             return "";
         }
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder("java.lang.Exception");
         for (int i = 0; i < exTypes.length; i++) {
-            if (i > 0) sb.append(", ");
+            if(exTypes[i] == Exception.class){
+                continue;
+            }
+            if (sb.length() > 0) sb.append(", ");
             sb.append(exTypes[i].getName());   // 用全限定名，Janino 最稳
         }
         return sb.toString();
@@ -235,7 +238,7 @@ public class ThriftPoolDirectProxy {
             Class proxyClass = directProxy(clazz);
             Constructor declaredConstructors = proxyClass.getDeclaredConstructor(
                     ThriftGenericKeyedObjectPool.class, ThriftGenericKeyedObjectPool.EndPoint.class);
-            ThriftGenericKeyedObjectPool instance = ThriftGenericKeyedObjectPool.getInstance(processRefer);
+            ThriftGenericKeyedObjectPool instance = ThriftGenericKeyedObjectPool.getInstance(processRefer, url);
             ThriftGenericKeyedObjectPool.EndPoint endPoint = new ThriftGenericKeyedObjectPool.EndPoint(clazz, url);
             Object o = declaredConstructors.newInstance(instance, endPoint);
             return (T) o;

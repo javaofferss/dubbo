@@ -25,6 +25,8 @@ import org.apache.commons.pool2.KeyedPooledObjectFactory;
 import org.apache.commons.pool2.PooledObject;
 import org.apache.commons.pool2.impl.DefaultPooledObject;
 import org.apache.commons.pool2.impl.GenericKeyedObjectPool;
+import org.apache.commons.pool2.impl.GenericKeyedObjectPoolConfig;
+import org.apache.thrift.TServiceClient;
 
 /**
  * 线程池
@@ -36,41 +38,72 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
         super(factory);
     }
 
+    public ThriftGenericKeyedObjectPool(final KeyedPooledObjectFactory factory, final GenericKeyedObjectPoolConfig config) {
+        super(factory, config);
+    }
+
     public static class ThriftKeyedPooledObjectFactory<T> extends BaseKeyedPooledObjectFactory<EndPoint<T>, T> {
 
         BiFunction<Class<T>, URL, T> processRefer;
 
         @Override
         public T create(EndPoint key) throws Exception {
-            return processRefer.apply((Class<T>) key.tClass, key.url);
+            T client = processRefer.apply((Class<T>) key.tClass, key.url);
+            return client;
         }
 
         @Override
         public PooledObject<T> wrap(Object value) {
             return new DefaultPooledObject(value);
         }
+
+        @Override
+        public boolean validateObject(EndPoint<T> key, PooledObject<T> p) {
+            TServiceClient client = (TServiceClient) p.getObject();
+            return client.getInputProtocol().getTransport().isOpen() &&
+                    client.getOutputProtocol().getTransport().isOpen();
+        }
+
+        @Override
+        public void destroyObject(EndPoint<T> key, PooledObject<T> p) throws Exception {
+            T client = p.getObject();
+            closeClient((TServiceClient) client);
+        }
+    }
+
+    static void closeClient(TServiceClient client) {
+        if (client != null) {
+            client.getInputProtocol().getTransport().close();
+            client.getOutputProtocol().getTransport().close();
+        }
     }
 
     public static class EndPoint<T> {
         Class<T> tClass;
         URL url;
+        String host;
+        int port;
+        String key;
 
         public EndPoint(Class<T> tClass, URL url) {
             this.tClass = tClass;
             this.url = url;
+            this.host = url.getHost();
+            this.port = url.getPort();
+            this.key = host+"_"+port;
         }
 
         @Override
         public boolean equals(Object obj) {
             if(obj instanceof EndPoint){
-                ((EndPoint<?>) obj).url.equals(this.url);
+                return ((EndPoint<?>) obj).key.equals(this.key);
             }
             return false;
         }
 
         @Override
         public int hashCode() {
-            return this.url.hashCode();
+            return this.key.hashCode();
         }
 
         @Override
@@ -83,9 +116,35 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
         }
     }
 
-    public static ThriftGenericKeyedObjectPool getInstance(BiFunction<Class, URL, Object> processRefer) {
+    public static ThriftGenericKeyedObjectPool getInstance(BiFunction<Class, URL, Object> processRefer, URL url) {
         ThriftKeyedPooledObjectFactory factory = new ThriftKeyedPooledObjectFactory();
         factory.processRefer = processRefer;
-        return new ThriftGenericKeyedObjectPool(factory);
+
+        // 线上默认连接池配置：以稳定、低抖动为目标，吞吐优先，兼顾空闲回收。
+        // URL 参数可覆盖任意默认值：pool.maxTotal / pool.maxTotalPerKey / pool.maxIdlePerKey
+        // / pool.minIdlePerKey / pool.maxWaitMillis / pool.timeBetweenEvictionRunsMillis
+        // / pool.minEvictableIdleTimeMillis / pool.numTestsPerEvictionRun / pool.blockWhenExhausted
+        // / pool.testOnBorrow / pool.testOnReturn / pool.testWhileIdle / pool.fairness
+        GenericKeyedObjectPoolConfig config = new GenericKeyedObjectPoolConfig();
+        config.setMaxTotal(url.getParameter("pool.maxTotal", 200));
+        config.setMaxTotalPerKey(url.getParameter("pool.maxTotalPerKey", 200));
+        config.setMaxIdlePerKey(url.getParameter("pool.maxIdlePerKey", 8));
+        config.setMinIdlePerKey(url.getParameter("pool.minIdlePerKey", 2));
+        // 借出时阻塞等待，最多等待 3s，避免突发流量下直接抛异常
+        config.setBlockWhenExhausted(url.getParameter("pool.blockWhenExhausted", true));
+        config.setMaxWaitMillis(url.getParameter("pool.maxWaitMillis", 3000L));
+        // 关闭 borrow/return 时的连通性校验（影响吞吐），仅依赖空闲驱逐线程做存活检测
+        config.setTestOnBorrow(url.getParameter("pool.testOnBorrow", true));
+        config.setTestOnReturn(url.getParameter("pool.testOnReturn", false));
+        config.setTestWhileIdle(url.getParameter("pool.testWhileIdle", true));
+        // 空闲对象驱逐线程：每 30s 跑一次，每次检测 3 个连接，空闲超过 10min 回收
+        config.setTimeBetweenEvictionRunsMillis(url.getParameter("pool.timeBetweenEvictionRunsMillis", 30_000L));
+        config.setNumTestsPerEvictionRun(url.getParameter("pool.numTestsPerEvictionRun", 3));
+        config.setMinEvictableIdleTimeMillis(url.getParameter("pool.minEvictableIdleTimeMillis", 600_000L));
+        config.setFairness(url.getParameter("pool.fairness", false));
+
+        ThriftGenericKeyedObjectPool pool = new ThriftGenericKeyedObjectPool(factory, config);
+
+        return pool;
     }
 }

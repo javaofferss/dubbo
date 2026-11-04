@@ -127,6 +127,7 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
         }
     }
 
+    //参考旧的rpc项目设置 ：com.xiaomi.miui.ad.infra.thrift.ThriftServiceRunner#startThriftServerImpl
     public THsHaServer createServer(
             TNonblockingServerTransport serverTransport, TProcessor processor, TProtocolFactory protocolFactory) {
         int cpuCores = Runtime.getRuntime().availableProcessors();
@@ -135,7 +136,7 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
                 cpuCores * 4, // 最大线程数（应对突发流量）
                 60L, // 空闲线程存活时间
                 TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(), // 无边界队列，可能内存溢出
+                new LinkedBlockingQueue<>(), // 无边界队列，可能内存溢出. 和旧逻辑保持一致.
                 new ThreadFactory() {
                     private final ThreadGroup group = new ThreadGroup("Thrift-Workers");
                     private int counter = 0;
@@ -205,14 +206,14 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
         try {
             T thriftClient = null;
             String typeName = type.getName();
-            String path = url.getPath();
+//            String path = url.getPath();
 
             int idx = Math.max(typeName.indexOf(THRIFT_ASYNC_IFACE), typeName.indexOf(THRIFT_IFACE));
             String asyncIfaceClassName = typeName.substring(0, idx) + THRIFT_ASYNC_IFACE;
             Class<?> asyncIfaceClass = Class.forName(asyncIfaceClassName);
             String syncIfaceClassName = typeName.substring(0, idx) + THRIFT_IFACE;
             Class<?> syncIfaceClass = Class.forName(syncIfaceClassName);
-            if (path.endsWith(THRIFT_IFACE)) {
+            if (typeName.endsWith(THRIFT_IFACE)) {
                 String clientClsName = typeName.substring(0, typeName.indexOf(THRIFT_IFACE)) + THRIFT_CLIENT;
                 Class<?> clazz = Class.forName(clientClsName);
                 Constructor constructor = clazz.getConstructor(TProtocol.class);
@@ -227,38 +228,41 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
                     thriftClient = (T) constructor.newInstance(tprotocol);
                     framed.open(); // 同步客户端需要手动打开（DubboHeaderClientTransport.open 委托给 framed）
                     System.out.println("Thrift client opened for " + url);
-                    T proxy = (T) ByteBuddyUtils.getProxy(syncIfaceClass, asyncIfaceClass, thriftClient);
-                    return proxy;
+//                    T proxy = (T) ByteBuddyUtils.getProxy(syncIfaceClass, asyncIfaceClass, thriftClient);
+//                    return proxy;
+                    return thriftClient;
                 } catch (Exception e) {
                     throw new RpcException("Fail to create remote client: " + url + "\n" + e.getMessage(), e);
                 }
-            } else if (path.endsWith(THRIFT_ASYNC_IFACE)) {
-
-                String clientClsName = typeName.substring(0, idx) + THRIFT_ASYNC_CLIENT;
-                Class<?> clazz = Class.forName(clientClsName);
-                Constructor constructor = clazz.getConstructor(
-                        TProtocolFactory.class, TAsyncClientManager.class, TNonblockingTransport.class);
-                try {
-                    TProtocolFactory protocolFactory = new TBinaryProtocol.Factory();
-
-                    TAsyncClientManager clientManager = new TAsyncClientManager();
-
-                    // 异步客户端会自动open.因此不需要显示调用open
-                    TNonblockingSocket tSocket = new TNonblockingSocket(url.getHost(), url.getPort());
-
-                    // 这里还可以对tSocket设置项
-                    tSocket.setTimeout(1000 * 60); // 60秒超时
-
-                    thriftClient = (T) constructor.newInstance(protocolFactory, clientManager, tSocket);
-
-                    System.out.println("Thrift Async client opened for " + url);
-
-                    T proxy = (T) ByteBuddyUtils.getProxy(asyncIfaceClass, syncIfaceClass, thriftClient);
-                    return proxy;
-                } catch (Exception e) {
-                    throw new RpcException("Fail to create remote client: " + url + "\n" + e.getMessage(), e);
-                }
-            } else {
+            }
+//            else if (typeName.endsWith(THRIFT_ASYNC_IFACE)) {
+//
+//                String clientClsName = typeName.substring(0, idx) + THRIFT_ASYNC_CLIENT;
+//                Class<?> clazz = Class.forName(clientClsName);
+//                Constructor constructor = clazz.getConstructor(
+//                        TProtocolFactory.class, TAsyncClientManager.class, TNonblockingTransport.class);
+//                try {
+//                    TProtocolFactory protocolFactory = new TBinaryProtocol.Factory();
+//
+//                    TAsyncClientManager clientManager = new TAsyncClientManager();
+//
+//                    // 异步客户端会自动open.因此不需要显示调用open
+//                    TNonblockingSocket tSocket = new TNonblockingSocket(url.getHost(), url.getPort());
+//
+//                    // 这里还可以对tSocket设置项
+//                    tSocket.setTimeout(1000 * 60); // 60秒超时
+//
+//                    thriftClient = (T) constructor.newInstance(protocolFactory, clientManager, tSocket);
+//
+//                    System.out.println("Thrift Async client opened for " + url);
+//
+//                    T proxy = (T) ByteBuddyUtils.getProxy(asyncIfaceClass, syncIfaceClass, thriftClient);
+//                    return proxy;
+//                } catch (Exception e) {
+//                    throw new RpcException("Fail to create remote client: " + url + "\n" + e.getMessage(), e);
+//                }
+//            }
+            else {
                 throw new RpcException(String.format("%s is not a thrift interface", typeName));
             }
 

@@ -74,7 +74,7 @@ public class ThriftPoolProxy implements InvocationHandler {
         }
 
         ThriftPoolProxy thriftPoolProxy = new ThriftPoolProxy();
-        thriftPoolProxy.pool = ThriftGenericKeyedObjectPool.getInstance(processRefer);
+        thriftPoolProxy.pool = ThriftGenericKeyedObjectPool.getInstance(processRefer, url);
         thriftPoolProxy.key = new EndPoint(clazz, url);
 
         @SuppressWarnings("unchecked")

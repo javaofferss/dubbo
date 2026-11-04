@@ -33,16 +33,16 @@ public class ThriftInterceptor {
         return pool.borrowObject(key);
     }
 
-    public void before(Object client, String methodName, Object... args) {
-        log.info("methodName {}", methodName);
+    public void before(ThriftGenericKeyedObjectPool.EndPoint key , String methodName, Object... args) {
+
     }
 
-    public void success(Object client, String methodName, Object response, Object... args) {
-        log.info("methodName {}", methodName);
+    public void success(ThriftGenericKeyedObjectPool.EndPoint key, String methodName, Object response, Object... args) {
+
     }
 
-    public void error(Object client, String methodName, Throwable throwable, Object... args) {
-        log.info("methodName {}", methodName);
+    public void error(ThriftGenericKeyedObjectPool.EndPoint key, String methodName, Throwable throwable, Object... args) {
+
     }
 
     public void recycleClient(
@@ -96,6 +96,6 @@ public class ThriftInterceptor {
     }
 
     public void over(Object client, String methodName) {
-        log.info("methodName {}", methodName);
+
     }
 }
