@@ -405,9 +405,8 @@ class TagStateRouterTest {
 
         List<Invoker<String>> originInvokers = new ArrayList<>();
         // backup tag is comma-separated multi-value: preview,gray
-        URL url1 =
-                URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview,gray")
-                        .setScopeModel(moduleModel);
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview,gray")
+                .setScopeModel(moduleModel);
         Invoker<String> invoker1 = new MockInvoker<>(url1, true);
         originInvokers.add(invoker1);
         BitList<Invoker<String>> invokers = new BitList<>(originInvokers);
@@ -492,7 +491,8 @@ class TagStateRouterTest {
         StateRouter router = new TagStateRouterFactory().getRouter(TagRouterRule.class, url);
 
         List<Invoker<String>> originInvokers = new ArrayList<>();
-        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online").setScopeModel(moduleModel);
+        URL url1 = URL.valueOf("test://127.0.0.1:7777/DemoInterface?dubbo.tag=online")
+                .setScopeModel(moduleModel);
         URL url2 = URL.valueOf("test://127.0.0.1:7778/DemoInterface?dubbo.tag=online&dubbo.backup.tag=preview,gray")
                 .setScopeModel(moduleModel);
         Invoker<String> invoker1 = new MockInvoker<>(url1, true);
@@ -545,8 +545,7 @@ class TagStateRouterTest {
 
         RpcInvocation invocation = new RpcInvocation();
         // no tag set on request; pass the consumer url (no dubbo.tag) so tag resolves to empty
-        List<Invoker<String>> filteredInvokers =
-                router.route(invokers.clone(), url, invocation, false, new Holder<>());
+        List<Invoker<String>> filteredInvokers = router.route(invokers.clone(), url, invocation, false, new Holder<>());
         // returns providers without dubbo.tag
         Assertions.assertEquals(1, filteredInvokers.size());
         Assertions.assertEquals(invoker2, filteredInvokers.get(0));

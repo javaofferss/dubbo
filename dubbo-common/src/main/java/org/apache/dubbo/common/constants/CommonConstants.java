@@ -357,6 +357,25 @@ public interface CommonConstants {
     String BACKUP_TAG_KEY = "dubbo.backup.tag";
 
     /**
+     * Consumer-side parameter: whether to enable automatic tag injection from a method argument.
+     * Also used as the {@code @Activate} key for {@code AutoTagClusterFilter} so the filter is only
+     * attached to references that opted in. See {@link org.apache.dubbo.config.annotation.AutoTag}.
+     */
+    String AUTO_TAG_FROM_ARG_KEY = "auto.tag.from.arg";
+
+    /**
+     * Consumer-side parameter: index of the argument used as the tag source when
+     * {@link #AUTO_TAG_FROM_ARG_KEY} is enabled. Default 0 (first argument).
+     */
+    String AUTO_TAG_ARG_INDEX_KEY = "auto.tag.arg.index";
+
+    /**
+     * Consumer-side parameter: whether to force tag routing (set {@code force.tag=true}) when no
+     * tagged provider matches the auto-injected tag. Default true.
+     */
+    String AUTO_TAG_FORCE_KEY = "auto.tag.force";
+
+    /**
      * To decide whether to make connection when the client is created
      */
     String LAZY_CONNECT_KEY = "lazy";

@@ -2,3 +2,4 @@ consumercontext=org.apache.dubbo.rpc.cluster.filter.support.ConsumerContextFilte
 consumer-classloader=org.apache.dubbo.rpc.cluster.filter.support.ConsumerClassLoaderFilter
 router-snapshot=org.apache.dubbo.rpc.cluster.router.RouterSnapshotFilter
 metricsConsumerFilter=org.apache.dubbo.rpc.cluster.filter.support.MetricsConsumerFilter
+autoTagClusterFilter=org.apache.dubbo.rpc.cluster.filter.support.AutoTagClusterFilter

@@ -30,7 +30,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -83,7 +85,7 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
         }
 
         servers.computeIfAbsent(key, k -> {
-            ThriftServer server = processExport(url.getPort(), getThriftProcessor(impl, type));
+            ThriftServer server = processExport(url.getPort(), getThriftProcessor(impl, type), url);
             return server;
         });
         Export.add(type);
@@ -128,28 +130,14 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
     }
 
     //参考旧的rpc项目设置 ：com.xiaomi.miui.ad.infra.thrift.ThriftServiceRunner#startThriftServerImpl
+    //线程池参数全部支持通过 URL 配置覆盖，未配置时沿用历史默认值（和旧逻辑保持一致）：
+    // thrift.server.coreThreads / thrift.server.maxThreads / thrift.server.keepAliveSeconds
+    // / thrift.server.queueCapacity / thrift.server.threadName / thrift.server.threadGroup
+    // / thrift.server.daemon / thrift.server.rejectedExecutionPolicy
     public THsHaServer createServer(
-            TNonblockingServerTransport serverTransport, TProcessor processor, TProtocolFactory protocolFactory) {
-        int cpuCores = Runtime.getRuntime().availableProcessors();
-        ExecutorService executorService = new ThreadPoolExecutor(
-                cpuCores * 2, // 核心线程数（保持活跃）
-                cpuCores * 4, // 最大线程数（应对突发流量）
-                60L, // 空闲线程存活时间
-                TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(), // 无边界队列，可能内存溢出. 和旧逻辑保持一致.
-                new ThreadFactory() {
-                    private final ThreadGroup group = new ThreadGroup("Thrift-Workers");
-                    private int counter = 0;
-
-                    @Override
-                    public Thread newThread(Runnable r) {
-                        Thread t = new Thread(group, r, "worker-" + (counter++));
-                        t.setDaemon(false); // 非守护线程，确保任务完成
-                        return t;
-                    }
-                },
-                new ThreadPoolExecutor.CallerRunsPolicy() // 拒绝策略：由调用者线程执行，保证系统不崩溃
-                );
+            TNonblockingServerTransport serverTransport, TProcessor processor, TProtocolFactory protocolFactory,
+            URL url) {
+        ExecutorService executorService = buildExecutorService(url);
 
         // fork 版 0.5.0-mdf：无 Args builder，inputProtocolFactory / outputProtocolFactory / executorService
         // 全部经构造器参数传入。transportFactory 默认 TFramedTransport.Factory，显式传入保持不变。
@@ -165,7 +153,64 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
                 new THsHaServer.Options());
     }
 
-    public ThriftServer processExport(int port, TProcessor processor) {
+    // 构建 THsHaServer 的工作线程池。所有参数均可由 URL 覆盖，默认值与历史实现一致。
+    private ExecutorService buildExecutorService(URL url) {
+        int defaultThreads = Runtime.getRuntime().availableProcessors() * 2;
+        return new ThreadPoolExecutor(
+                url.getParameter("thrift.server.coreThreads", defaultThreads),
+                url.getParameter("thrift.server.maxThreads", defaultThreads),
+                url.getParameter("thrift.server.keepAliveSeconds", 60L),
+                TimeUnit.SECONDS,
+                // 默认无边界队列，可能内存溢出，与旧逻辑保持一致
+                new LinkedBlockingQueue<>(url.getParameter("thrift.server.queueCapacity", Integer.MAX_VALUE)),
+                new ThriftWorkerThreadFactory(
+                        url.getParameter("thrift.server.threadGroup", "Thrift-Workers"),
+                        url.getParameter("thrift.server.threadName", "worker-"),
+                        url.getParameter("thrift.server.daemon", false)),
+                buildRejectedExecutionHandler(
+                        url.getParameter("thrift.server.rejectedExecutionPolicy", "CallerRunsPolicy")));
+    }
+
+    // 拒绝策略按名称映射，未识别或为空时退回默认 CallerRunsPolicy（和旧逻辑保持一致）
+    private static RejectedExecutionHandler buildRejectedExecutionHandler(String policy) {
+        if (policy == null) {
+            return new ThreadPoolExecutor.CallerRunsPolicy();
+        }
+        switch (policy) {
+            case "AbortPolicy":
+                return new ThreadPoolExecutor.AbortPolicy();
+            case "DiscardPolicy":
+                return new ThreadPoolExecutor.DiscardPolicy();
+            case "DiscardOldestPolicy":
+                return new ThreadPoolExecutor.DiscardOldestPolicy();
+            case "CallerRunsPolicy":
+            default:
+                return new ThreadPoolExecutor.CallerRunsPolicy();
+        }
+    }
+
+    // THsHaServer 工作线程工厂：固定线程组 + 自增编号命名，默认非守护线程确保任务完成
+    private static final class ThriftWorkerThreadFactory implements ThreadFactory {
+        private final ThreadGroup group;
+        private final String namePrefix;
+        private final boolean daemon;
+        private final AtomicInteger counter = new AtomicInteger();
+
+        ThriftWorkerThreadFactory(String groupName, String namePrefix, boolean daemon) {
+            this.group = new ThreadGroup(groupName);
+            this.namePrefix = namePrefix;
+            this.daemon = daemon;
+        }
+
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(group, r, namePrefix + counter.getAndIncrement());
+            t.setDaemon(daemon);
+            return t;
+        }
+    }
+
+    public ThriftServer processExport(int port, TProcessor processor, URL url) {
         try {
             ThriftServer thriftServer = new ThriftServer();
             // 1. 创建处理器
@@ -179,7 +224,7 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
             TProtocolFactory protocolFactory = new TBinaryProtocol.Factory();
 
             // 4. 创建非阻塞服务器（fork 版 0.5.0-mdf 无 Args builder，直接构造）
-            THsHaServer server = createServer(serverTransport, processor, protocolFactory);
+            THsHaServer server = createServer(serverTransport, processor, protocolFactory, url);
 
             // 6. 启动服务（会阻塞主线程）
             new Thread(() -> {

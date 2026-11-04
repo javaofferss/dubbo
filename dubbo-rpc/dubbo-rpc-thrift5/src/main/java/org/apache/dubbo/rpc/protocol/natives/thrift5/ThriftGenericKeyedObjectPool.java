@@ -128,8 +128,9 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
         GenericKeyedObjectPoolConfig config = new GenericKeyedObjectPoolConfig();
         config.setMaxTotal(url.getParameter("pool.maxTotal", 200));
         config.setMaxTotalPerKey(url.getParameter("pool.maxTotalPerKey", 200));
-        config.setMaxIdlePerKey(url.getParameter("pool.maxIdlePerKey", 8));
-        config.setMinIdlePerKey(url.getParameter("pool.minIdlePerKey", 2));
+        //下面这两个在测qps时所调整后的值64-16。120并发，2.9w/qps
+        config.setMaxIdlePerKey(url.getParameter("pool.maxIdlePerKey", 64));
+        config.setMinIdlePerKey(url.getParameter("pool.minIdlePerKey", 16));
         // 借出时阻塞等待，最多等待 3s，避免突发流量下直接抛异常
         config.setBlockWhenExhausted(url.getParameter("pool.blockWhenExhausted", true));
         config.setMaxWaitMillis(url.getParameter("pool.maxWaitMillis", 3000L));

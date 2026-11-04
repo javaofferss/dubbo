@@ -20,12 +20,14 @@ import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
 import org.apache.dubbo.config.AbstractConfig;
 import org.apache.dubbo.config.ArgumentConfig;
+import org.apache.dubbo.config.AutoTagConfig;
 import org.apache.dubbo.config.ConsumerConfig;
 import org.apache.dubbo.config.MethodConfig;
 import org.apache.dubbo.config.ModuleConfig;
 import org.apache.dubbo.config.MonitorConfig;
 import org.apache.dubbo.config.ReferenceConfig;
 import org.apache.dubbo.config.annotation.Argument;
+import org.apache.dubbo.config.annotation.AutoTag;
 import org.apache.dubbo.config.annotation.DubboReference;
 import org.apache.dubbo.config.annotation.Method;
 import org.apache.dubbo.config.spring.beans.factory.annotation.AnnotationPropertyValuesAdapter;
@@ -203,6 +205,16 @@ public class ReferenceCreator {
             argDataBinder.setConversionService(conversionService);
             argDataBinder.bind(new AnnotationPropertyValuesAdapter(source, applicationContext.getEnvironment()));
             return argumentConfig;
+        });
+
+        // convert @AutoTag (nested on @DubboReference) to AutoTagConfig
+        conversionService.addConverter(AutoTag.class, AutoTagConfig.class, AutoTagConfig::new);
+        conversionService.addConverter(Map.class, AutoTagConfig.class, source -> {
+            AutoTagConfig autoTagConfig = new AutoTagConfig();
+            DataBinder autoTagDataBinder = new DataBinder(autoTagConfig);
+            autoTagDataBinder.setConversionService(conversionService);
+            autoTagDataBinder.bind(new AnnotationPropertyValuesAdapter(source, applicationContext.getEnvironment()));
+            return autoTagConfig;
         });
 
         // Bind annotation attributes

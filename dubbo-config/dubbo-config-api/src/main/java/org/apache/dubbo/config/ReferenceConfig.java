@@ -67,6 +67,9 @@ import java.util.TreeSet;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANY_VALUE;
+import static org.apache.dubbo.common.constants.CommonConstants.AUTO_TAG_ARG_INDEX_KEY;
+import static org.apache.dubbo.common.constants.CommonConstants.AUTO_TAG_FORCE_KEY;
+import static org.apache.dubbo.common.constants.CommonConstants.AUTO_TAG_FROM_ARG_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.CLUSTER_DOMAIN;
 import static org.apache.dubbo.common.constants.CommonConstants.CLUSTER_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.COMMA_SEPARATOR;
@@ -459,6 +462,14 @@ public class ReferenceConfig<T> extends ReferenceConfigBase<T> {
         AbstractConfig.appendParameters(map, getModule());
         AbstractConfig.appendParameters(map, consumer);
         AbstractConfig.appendParameters(map, this);
+
+        // Auto tag routing from argument:透传嵌套 @AutoTag 配置到 URL 参数(filter 端读取)
+        AutoTagConfig autoTagConfig = getAutoTag();
+        if (autoTagConfig != null && autoTagConfig.isEnabled()) {
+            map.put(AUTO_TAG_FROM_ARG_KEY, "true");
+            map.put(AUTO_TAG_ARG_INDEX_KEY, String.valueOf(autoTagConfig.getIndex()));
+            map.put(AUTO_TAG_FORCE_KEY, String.valueOf(autoTagConfig.isForce()));
+        }
 
         String hostToRegistry = ConfigUtils.getSystemProperty(DUBBO_IP_TO_REGISTRY);
         if (StringUtils.isEmpty(hostToRegistry)) {

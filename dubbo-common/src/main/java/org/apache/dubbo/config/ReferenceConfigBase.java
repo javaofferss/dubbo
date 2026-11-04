@@ -79,6 +79,14 @@ public abstract class ReferenceConfigBase<T> extends AbstractReferenceConfig {
      */
     protected Boolean unloadClusterRelated;
 
+    /**
+     * Automatic tag routing driven by a method argument. Off by default ({@code null} / disabled).
+     *
+     * @see org.apache.dubbo.config.AutoTagConfig
+     * @since 3.3.7
+     */
+    protected AutoTagConfig autoTag;
+
     public ReferenceConfigBase() {
         serviceMetadata = new ServiceMetadata();
         serviceMetadata.addAttribute(ORIGIN_CONFIG, this);
@@ -302,6 +310,15 @@ public abstract class ReferenceConfigBase<T> extends AbstractReferenceConfig {
 
     public void setUnloadClusterRelated(Boolean unloadClusterRelated) {
         this.unloadClusterRelated = unloadClusterRelated;
+    }
+
+    @Parameter(excluded = true)
+    public AutoTagConfig getAutoTag() {
+        return autoTag;
+    }
+
+    public void setAutoTag(AutoTagConfig autoTag) {
+        this.autoTag = autoTag;
     }
 
     @Transient

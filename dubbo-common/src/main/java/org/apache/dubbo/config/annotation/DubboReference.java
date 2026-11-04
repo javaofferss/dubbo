@@ -383,4 +383,16 @@ public @interface DubboReference {
      * @since 3.1.0
      */
     boolean unloadClusterRelated() default false;
+
+    /**
+     * Automatic tag routing driven by a method argument.
+     * <p>
+     * When {@link AutoTag#enabled()} is true, the argument at {@link AutoTag#index()} is converted
+     * to a string and set as the request tag ({@code dubbo.tag}) before cluster routing, so
+     * {@code TagStateRouter} can route to providers tagged with that value. Off by default.
+     *
+     * @see AutoTag
+     * @since 3.3.7
+     */
+    AutoTag autoTag() default @AutoTag;
 }
