@@ -16,6 +16,7 @@
  */
 package org.apache.dubbo.config.spring.beans.factory.annotation;
 
+import org.apache.dubbo.rpc.RpcIface;
 import org.apache.dubbo.common.compact.Dubbo2CompactUtils;
 import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
 import org.apache.dubbo.common.logger.LoggerFactory;
@@ -39,7 +40,11 @@ import org.apache.dubbo.rpc.service.GenericService;
 
 import java.beans.PropertyDescriptor;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.lang.reflect.Member;
+import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -60,7 +65,9 @@ import org.springframework.beans.factory.config.BeanDefinitionHolder;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.AbstractBeanFactory;
+import org.springframework.beans.factory.support.BeanDefinitionBuilder;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.GenericBeanDefinition;
 import org.springframework.beans.factory.support.RootBeanDefinition;
@@ -389,6 +396,9 @@ public class ReferenceAnnotationBeanPostProcessor extends AbstractAnnotationBean
                         fieldElement.getPropertyName(), injectedType, attributes, fieldElement.field);
 
                 // associate fieldElement and reference bean
+                if(injectedType == RpcIface.class){
+                    referenceBeanName = referenceBeanName +"_RPC_IFACE";
+                }
                 fieldElement.injectedObject = referenceBeanName;
                 injectedFieldReferenceBeanCache.put(fieldElement, referenceBeanName);
             }
@@ -411,9 +421,28 @@ public class ReferenceAnnotationBeanPostProcessor extends AbstractAnnotationBean
         }
     }
 
+    public static Class getGenericClassOfCollect(Field fd)  {
+        try {
+            ParameterizedType listGenericType = (ParameterizedType) fd.getGenericType();
+            Type listActualTypeArguments = listGenericType.getActualTypeArguments()[0];
+            return Class.forName(listActualTypeArguments.getTypeName());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public String registerReferenceBean(
             String propertyName, Class<?> injectedType, Map<String, Object> attributes, Member member)
             throws BeansException {
+        Class rpcIface = null;
+        if(injectedType == RpcIface.class){
+            rpcIface = injectedType;
+            if(member instanceof Field){
+                injectedType = getGenericClassOfCollect((Field)member);
+            }else if(member instanceof Method){
+                //待实现
+            }
+        }
 
         boolean renameable = true;
         // referenceBeanName
@@ -564,6 +593,15 @@ public class ReferenceAnnotationBeanPostProcessor extends AbstractAnnotationBean
         beanDefinitionRegistry.registerBeanDefinition(referenceBeanName, beanDefinition);
         referenceBeanManager.registerReferenceKeyAndBeanName(referenceKey, referenceBeanName);
         logger.info("Register dubbo reference bean: " + referenceBeanName + " = " + referenceKey + " at " + member);
+
+        if(rpcIface !=null) {
+            BeanDefinitionBuilder beanDefinitionBuilder = BeanDefinitionBuilder.genericBeanDefinition(rpcIface);
+            beanDefinitionBuilder.addConstructorArgReference( referenceBeanName);
+            AbstractBeanDefinition rpcIfaceBeanDefinition = beanDefinitionBuilder.getBeanDefinition();
+            String rpcIfaceName = referenceBeanName+"_RPC_IFACE";
+            beanDefinitionRegistry.registerBeanDefinition(rpcIfaceName, rpcIfaceBeanDefinition);
+        }
+
         return referenceBeanName;
     }
 
