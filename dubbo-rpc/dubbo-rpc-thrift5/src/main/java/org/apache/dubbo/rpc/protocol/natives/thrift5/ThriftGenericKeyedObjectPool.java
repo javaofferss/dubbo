@@ -126,8 +126,8 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
         // / pool.minEvictableIdleTimeMillis / pool.numTestsPerEvictionRun / pool.blockWhenExhausted
         // / pool.testOnBorrow / pool.testOnReturn / pool.testWhileIdle / pool.fairness
         GenericKeyedObjectPoolConfig config = new GenericKeyedObjectPoolConfig();
-        config.setMaxTotal(url.getParameter("pool.maxTotal", 200));
-        config.setMaxTotalPerKey(url.getParameter("pool.maxTotalPerKey", 200));
+        config.setMaxTotal(url.getParameter("pool.maxActiveConnection", 200));
+        config.setMaxTotalPerKey(url.getParameter("pool.maxActiveConnection", 200));
         //下面这两个在测qps时所调整后的值64-16。120并发，2.9w/qps
         config.setMaxIdlePerKey(url.getParameter("pool.maxIdlePerKey", 64));
         config.setMinIdlePerKey(url.getParameter("pool.minIdlePerKey", 16));
@@ -144,6 +144,7 @@ public class ThriftGenericKeyedObjectPool<T> extends GenericKeyedObjectPool<Thri
         config.setMinEvictableIdleTimeMillis(url.getParameter("pool.minEvictableIdleTimeMillis", 600_000L));
         config.setFairness(url.getParameter("pool.fairness", false));
 
+        //每一个key只有一个池. 每个key隔离. 所以maxTotal 和 maxTotalPerKey 设置的是一样的.
         ThriftGenericKeyedObjectPool pool = new ThriftGenericKeyedObjectPool(factory, config);
 
         return pool;
