@@ -179,10 +179,10 @@ public class ThriftPoolDirectProxy {
                 // 拼装代码
                 code.append(String.format(METHOD, returnType.getName(), methodName, pcs));
                 code.append(METHOD_E);
-                code.append(String.format(METHOD_I, methodName, pcObjs));
+                code.append(String.format(METHOD_I, methodName, (pcObjs.length() == 0 ? "null" : pcObjs)));
                 if (returnType == Void.class || returnType == void.class) {
                     code.append(
-                            String.format(METHOD_I_VOID, throwsClause, faceClassNameCode, methodName, pcObjs, methodName, pcObjs));
+                            String.format(METHOD_I_VOID, throwsClause, faceClassNameCode, methodName, pcObjs, methodName, (pcObjs.length() == 0 ? "null" : pcObjs)));
                 } else {
                     code.append(String.format(
                             METHOD_I_RETURN,
@@ -191,7 +191,7 @@ public class ThriftPoolDirectProxy {
                             methodName,
                             pcObjs,
                             methodName,
-                            pcObjs,
+                            (pcObjs.length() == 0 ? "null" : pcObjs),
                             unboxExpr(returnType.getName())));
                 }
                 code.append(String.format(METHOD_I3, methodName, methodName));

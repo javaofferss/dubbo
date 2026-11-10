@@ -156,9 +156,11 @@ public class Thrift5Protocol extends AbstractThriftProxyProtocol {
     // 构建 THsHaServer 的工作线程池。所有参数均可由 URL 覆盖，默认值与历史实现一致。
     private ExecutorService buildExecutorService(URL url) {
         int defaultThreads = Runtime.getRuntime().availableProcessors() * 2;
+        int coreThreads = url.getParameter("thrift.server.coreThreads", defaultThreads);
+        int maxThreads = url.getParameter("thrift.server.maxThreads", defaultThreads);
         return new ThreadPoolExecutor(
-                url.getParameter("thrift.server.coreThreads", defaultThreads),
-                url.getParameter("thrift.server.maxThreads", defaultThreads),
+                coreThreads,
+                Math.max(maxThreads, coreThreads),
                 url.getParameter("thrift.server.keepAliveSeconds", 60L),
                 TimeUnit.SECONDS,
                 // 默认无边界队列，可能内存溢出，与旧逻辑保持一致
