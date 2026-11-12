@@ -91,7 +91,6 @@ public class ThriftPoolDirectProxy {
 
     static String METHOD_I3 =
             "  } catch (Exception e) {\n"
-            + "     e.printStackTrace();\n"
             + "     thriftInterceptor.error(key, \"%s\", e); errObj = e; \n"
             + "     throw new RuntimeException(e);\n"
             + " } finally {\n"

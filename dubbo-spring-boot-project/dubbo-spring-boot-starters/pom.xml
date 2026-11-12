@@ -32,6 +32,7 @@
   <modules>
     <module>dubbo-nacos-spring-boot-starter</module>
     <module>dubbo-zookeeper-curator5-spring-boot-starter</module>
+    <module>dubbo-zookeeper-curator2-spring-boot-starter</module>
     <module>dubbo-sentinel-spring-boot-starter</module>
     <module>dubbo-seata-spring-boot-starter</module>
     <module>dubbo-spring-boot-starter</module>

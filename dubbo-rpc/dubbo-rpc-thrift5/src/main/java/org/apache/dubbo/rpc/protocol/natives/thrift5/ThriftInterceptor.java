@@ -77,7 +77,7 @@ public class ThriftInterceptor {
                         }
                     }
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    log.error(e.getMessage());
                 }
             }
             pool.returnObject(key, client);
