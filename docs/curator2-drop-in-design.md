@@ -260,18 +260,46 @@ drop-in 的机制是「classpath 上 curator5 jar 换成 curator2 jar」。所�
 
 ---
 
-## 8. 聚合 jar 路线的已知问题（待处理）
+## 8. 聚合 jar 路线（dubbo-spring-boot-starter）——已用方案 2 解决
 
-如果应用走 `dubbo-spring-boot-starter` 或直接依赖 `org.apache.dubbo:dubbo`（聚合 fat jar）：
+### 8.1 问题
 
-- `dubbo-distribution/dubbo-all` 用 `maven-shade-plugin` 把 `dubbo-remoting-zookeeper-curator5` 的类**直接打进 fat jar**（pom 里 shade `<include>` 了它，但没 include curator2）。
-- 所以聚合 jar 里永远是 curator5 的 `Curator5ZookeeperClient`——它有 `ensembleTracker(boolean)` **直调**。
-- 应用 classpath 上若 curator < 5（2.x 或 4.x），运行期会 `NoSuchMethodError: Builder.ensembleTracker(boolean)`。
+`dubbo-spring-boot-starter` → `dubbo-spring-boot-autoconfigure` → `org.apache.dubbo:dubbo`（聚合 fat jar）。`dubbo-distribution/dubbo-all` 用 `maven-shade-plugin` 把 zookeeper 客户端实现类**直接打进 fat jar**。原配置 shade 的是 `dubbo-remoting-zookeeper-curator5`，所以聚合 jar 里是 curator5 的 `Curator5ZookeeperClient`——有 `ensembleTracker(boolean)` **直调**，curator < 5 时运行期 `NoSuchMethodError`。
 
-curator2 drop-in 在聚合 jar 路线下**不生效**（curator2 的类没被 shade 进聚合 jar，且聚合 jar 里 curator5 的类 exclude 不了）。要解决有两条路（暂搁置）：
+聚合 jar 里 curator5 的类 exclude 不了，所以 drop-in starter 单独加没用（要么类冲突，要么还是调到 curator5 那个）。
 
-- **方案 1**：改 curator5 源码，把 `Curator5ZookeeperClient` 里的 `ensembleTracker` 直调改成反射（和 `CuratorFrameworkUtils` 已有的反射写法一致）。聚合 jar 里的类就兼容 curator 2/4/5 任意版本。改动 2 行，但动了 curator5 源码。
-- **方案 2**：改 `dubbo-all/pom.xml` 的 shade 配置，把 `dubbo-remoting-zookeeper-curator5` 换成 `dubbo-remoting-zookeeper-curator2`。聚合 jar 变成 curator2 专版，不碰任何 java 源码，curator2 drop-in 真正生效。
+### 8.2 方案 2（已落地）：聚合 jar 改打 curator2
+
+改 `dubbo-distribution/dubbo-all/pom.xml` 两处：
+
+1. dependency：`dubbo-remoting-zookeeper-curator5` → `dubbo-remoting-zookeeper-curator2`
+2. shade `<include>`：`org.apache.dubbo:dubbo-remoting-zookeeper-curator5` → `org.apache.dubbo:dubbo-remoting-zookeeper-curator2`
+
+shade 的 `<include>` 过滤器只把 curator2 模块的类打进聚合 jar（curator5 模块虽然在 reactor 里、且被 registry/metadata/configcenter zookeeper 传递依赖，但不在 include 列表，其类不会被 shade 进来）。验证：聚合 jar 里的 `Curator5ZookeeperClient.class` 不含 `ensembleTracker` 字符串，即 curator2 版。
+
+聚合 jar 的 dubbo 模块依赖都是 `<optional>true</optional>`，所以 `dubbo-spring-boot-starter` **不会**把 curator / zookeeper jar 传递给应用——应用必须自己声明（见下）。
+
+### 8.3 dubbo-spring-boot-starter 项目的用法
+
+```xml
+<dependency>
+  <groupId>org.apache.dubbo</groupId>
+  <artifactId>dubbo-spring-boot-starter</artifactId>
+  <version>3.3.7-xiaomi-SNAPSHOT</version>
+</dependency>
+<dependency>
+  <groupId>org.apache.dubbo</groupId>
+  <artifactId>dubbo-zookeeper-curator2-spring-boot-starter</artifactId>
+  <version>3.3.7-xiaomi-SNAPSHOT</version>
+</dependency>
+```
+
+- `dubbo-spring-boot-starter` 带入聚合 jar（里面已 shade curator2 的 `Curator5ZookeeperClient`，无 `ensembleTracker` 调用）。
+- `dubbo-zookeeper-curator2-spring-boot-starter` 带入 `curator-framework/recipes/x-discovery 2.12.0` + `zookeeper 3.4.5` + curator2 impl jar。
+- curator2 impl jar 和聚合 jar 里 shade 的 curator2 类同名同包（都是 curator2 版，完全一致），classpath 上重复但无害（JVM 加载哪个都是 curator2 实现）。
+- 应用代码 / 配置不变（`dubbo.registry.address=zookeeper://...` 照常）。
+
+> 注意：聚合 jar 现在是 **curator2 专版**（不再支持 curator5）。这是小米 ZK 3.4.5 场景的预期。如果以后要切回 curator5，把 `dubbo-all/pom.xml` 那两处改回 `curator5` 即可。
 
 ---
 
