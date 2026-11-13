@@ -357,6 +357,13 @@ public interface CommonConstants {
     String BACKUP_TAG_KEY = "dubbo.backup.tag";
 
     /**
+     * Turn on the backup tab, sort according to the dictionary, and look upwards for the nearest one.
+     * TIP : 该标记优先级低于强制使用标记. 如果设置了强制使用标记。则此标记不生效.
+     * dubbo.force.tag
+     */
+    String BACKUP_TAG_RECENT_ROUTER = "dubbo.recent.backup.tag";
+
+    /**
      * Consumer-side parameter: whether to enable automatic tag injection from a method argument.
      * Also used as the {@code @Activate} key for {@code AutoTagClusterFilter} so the filter is only
      * attached to references that opted in. See {@link org.apache.dubbo.config.annotation.AutoTag}.

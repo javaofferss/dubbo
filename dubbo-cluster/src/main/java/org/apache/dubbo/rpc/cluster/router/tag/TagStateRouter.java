@@ -36,13 +36,17 @@ import org.apache.dubbo.rpc.cluster.router.state.BitList;
 import org.apache.dubbo.rpc.cluster.router.tag.model.TagRouterRule;
 import org.apache.dubbo.rpc.cluster.router.tag.model.TagRuleParser;
 
+import java.util.ArrayList;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Predicate;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANYHOST_VALUE;
 import static org.apache.dubbo.common.constants.CommonConstants.ANY_VALUE;
 import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_KEY;
+import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_RECENT_ROUTER;
 import static org.apache.dubbo.common.constants.CommonConstants.TAG_KEY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_EMPTY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_INVALID;
@@ -216,6 +220,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 : invocation.getAttachment(TAG_KEY);
         // Tag request
         if (!StringUtils.isEmpty(tag)) {
+            //先从主标签找。Start by looking at the dubbo tag.
             result = filterInvoker(
                     invokers,
                     invoker ->
@@ -227,8 +232,15 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                         invoker -> StringUtils.isContains(
                                 invoker.getUrl().getParameter(BACKUP_TAG_KEY), tag));
             }
+            //获取强制标识.
+            boolean forceUseTag = isForceUseTag(invocation);
+            //如果没有开启强制标识。并且设置了backup标签最近路由.
+            if(CollectionUtils.isEmpty(result) && isRecentUserBackupTag(invocation) && !forceUseTag) {
+                result = filterRecentBackupTag(invokers, tag, result);
+            }
 
-            if (CollectionUtils.isEmpty(result) && !isForceUseTag(invocation)) {
+            //Not mandatory, chosen randomly
+            if (CollectionUtils.isEmpty(result) && !forceUseTag) {
                 result = filterInvoker(
                         invokers,
                         invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
@@ -236,6 +248,35 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
         } else {
             result = filterInvoker(
                     invokers, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
+        }
+        return result;
+    }
+
+    private static <T> BitList<Invoker<T>> filterRecentBackupTag(
+            BitList<Invoker<T>> invokers,
+            String tag,
+            BitList<Invoker<T>> result) {
+        TreeMap<String, ArrayList<Invoker<T>>> sort = new TreeMap<>();
+        invokers.forEach(invoker->{
+            String backupTags = invoker.getUrl().getParameter(BACKUP_TAG_KEY);
+            if(StringUtils.isBlank(backupTags)){
+               return;
+            }
+            String[] backupTagArr = backupTags.split(",");
+            for(String backupTag : backupTagArr){
+                if(StringUtils.isBlank(backupTag)){
+                    continue;
+                }
+                ArrayList<Invoker<T>> bitList = sort.computeIfAbsent(backupTag, k -> new ArrayList<>());
+                bitList.add(invoker);
+            }
+        });
+
+        Entry<String, ArrayList<Invoker<T>>> ceilingEntries = sort.ceilingEntry(tag);
+        ArrayList<Invoker<T>> choseResult = null;
+        //Reassigned local variable
+        if(ceilingEntries != null && CollectionUtils.isNotEmpty(choseResult = ceilingEntries.getValue())){
+            result = new BitList<>(choseResult);
         }
         return result;
     }
@@ -254,6 +295,11 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
     private boolean isForceUseTag(Invocation invocation) {
         return Boolean.parseBoolean(
                 invocation.getAttachment(FORCE_USE_TAG, this.getUrl().getParameter(FORCE_USE_TAG, "false")));
+    }
+
+    private boolean isRecentUserBackupTag(Invocation invocation) {
+        return Boolean.parseBoolean(
+                invocation.getAttachment(BACKUP_TAG_RECENT_ROUTER, this.getUrl().getParameter(BACKUP_TAG_RECENT_ROUTER, "false")));
     }
 
     private <T> BitList<Invoker<T>> filterInvoker(BitList<Invoker<T>> invokers, Predicate<Invoker<T>> predicate) {
